@@ -337,6 +337,15 @@ static void callback(const nrsc5_event_t *evt, void *opaque)
             fwrite(evt->iq.data, 1, evt->iq.count, st->iq_file);
         break;
     case NRSC5_EVENT_HDC:
+        if (evt->hdc.flags & NRSC5_PKT_FLAGS_CRC_ERROR)
+        {
+            log_warn("CRC mismatch for program: %d", evt->hdc.program);
+        }
+        if (evt->hdc.flags & NRSC5_PKT_FLAGS_HALF_PKT)
+        {
+            log_warn("Received half packet for program %d", evt->hdc.program);
+        }
+
         if (evt->hdc.program == st->program)
         {
             if (st->hdc_file)

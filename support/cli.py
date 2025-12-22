@@ -219,6 +219,11 @@ class NRSC5CLI:
         elif evt_type == nrsc5.EventType.BER:
             logging.info("BER: %.6f", evt.cber)
         elif evt_type == nrsc5.EventType.HDC:
+            if evt.flags & nrsc5.PacketFlags.CRC_ERROR:
+                logging.error("CRC mismatch for program: %d", evt.program)
+            if evt.flags & nrsc5.PacketFlags.HALF_PKT:
+                logging.error("Received half packet for program %d", evt.program)
+
             if evt.program == self.args.program:
                 if self.args.dump_hdc:
                     self.hdc_output.write(self.adts_header(len(evt.data)))
