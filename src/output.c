@@ -61,6 +61,11 @@ void output_push(output_t *st, const packet_ref_t* ref)
     }
 }
 
+static int is_complete_pkt(const packet_t* pkt)
+{
+    return pkt->shape == PACKET_FULL && !(pkt->flags & PACKET_FLAG_CRC_ERROR);
+}
+
 static void pkt_reset(packet_t* pkt)
 {
     pkt->size = 0;
@@ -83,18 +88,16 @@ void output_advance(output_t *st)
         for (frame = 0; frame < audio_frames; frame++)
         {
             packet_t* pkt = &elastic->packets[elastic->audio_offset];
-            unsigned int len = pkt->size;
-            uint8_t *data = pkt->data;
 #ifdef USE_FAAD2
             int produced_audio = 0;
 #endif
 
-            if (len > 0)
+            if (pkt->size > 0)
             {
                 nrsc5_report_hdc(st->radio, program, pkt);
             }
 
-            if (pkt->shape == PACKET_FULL && !(pkt->flags & PACKET_FLAG_CRC_ERROR))
+            if (is_complete_pkt(pkt))
             {
 #ifdef USE_FAAD2
                 void *buffer;
@@ -105,7 +108,7 @@ void output_advance(output_t *st)
                     NeAACDecInitHDC(&st->aacdec[program]);
                 }
 
-                buffer = NeAACDecDecode(st->aacdec[program], &info, data, len);
+                buffer = NeAACDecDecode(st->aacdec[program], &info, pkt->data, pkt->size);
                 if (info.error > 0)
                     log_error("Decode error: %s", NeAACDecGetErrorMessage(info.error));
 
