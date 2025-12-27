@@ -74,6 +74,7 @@ typedef struct {
     unsigned int audio_ready;
     unsigned int audio_packets;
     unsigned int audio_bytes;
+    unsigned int audio_errors;
     int done;
 } state_t;
 
@@ -337,26 +338,26 @@ static void callback(const nrsc5_event_t *evt, void *opaque)
             fwrite(evt->iq.data, 1, evt->iq.count, st->iq_file);
         break;
     case NRSC5_EVENT_HDC:
-        if (evt->hdc.flags & NRSC5_PKT_FLAGS_CRC_ERROR)
-        {
-            log_warn("CRC mismatch for program: %d", evt->hdc.program);
-        }
-        if (evt->hdc.flags & NRSC5_PKT_FLAGS_HALF_PKT)
-        {
-            log_warn("Received half packet for program %d", evt->hdc.program);
-        }
-
         if (evt->hdc.program == st->program)
         {
             if (st->hdc_file)
                 dump_hdc(st->hdc_file, evt->hdc.data, evt->hdc.count);
 
+            if (evt->hdc.flags & NRSC5_PKT_FLAGS_HALF_PKT)
+                log_debug("Received half packet");
+
             st->audio_packets++;
             st->audio_bytes += evt->hdc.count * sizeof(evt->hdc.data[0]);
+            if (evt->hdc.flags & NRSC5_PKT_FLAGS_CRC_ERROR)
+                st->audio_errors++;
+
             if (st->audio_packets >= 32) {
                 log_info("Audio bit rate: %.1f kbps", (float)st->audio_bytes * 8 * NRSC5_SAMPLE_RATE_AUDIO / NRSC5_AUDIO_FRAME_SAMPLES / st->audio_packets / 1000);
+                if (st->audio_errors > 0)
+                    log_warn("CRC mismatch: %d/32", st->audio_errors);
                 st->audio_packets = 0;
                 st->audio_bytes = 0;
+                st->audio_errors = 0;
             }
         }
         break;
