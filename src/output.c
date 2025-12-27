@@ -39,11 +39,8 @@ void output_push(output_t *st, const packet_ref_t* ref)
     elastic_buffer_t *elastic = &st->elastic[ref->program][ref->stream_id];
     packet_t* pkt = &elastic->packets[ref->seq];
 
-    if (ref->stream_id != 0)
-        return; // TODO: Process enhanced stream
-
     if (pkt->shape == PACKET_FULL)
-       log_warn("Packet %d already exists in elastic buffer for program %d, stream %d. Overwriting.", ref->seq, ref->program, ref->stream_id);
+        log_warn("Packet %d already exists in elastic buffer for program %d, stream %d. Overwriting.", ref->seq, ref->program, ref->stream_id);
 
     if (pkt->shape == PACKET_HALF_FRONT && ref->shape == PACKET_HALF_BACK)
     {
@@ -61,7 +58,7 @@ void output_push(output_t *st, const packet_ref_t* ref)
     }
 }
 
-static int is_complete_pkt(const packet_t* pkt)
+static int is_complete_pkt(const packet_ref_t* pkt)
 {
     return pkt->shape == PACKET_FULL && !(pkt->flags & PACKET_FLAG_CRC_ERROR);
 }
@@ -73,31 +70,54 @@ static void pkt_reset(packet_t* pkt)
     pkt->shape = PACKET_NONE;
 }
 
+static packet_ref_t collect_packet(output_t *st, unsigned int program, unsigned int stream_id)
+{
+    elastic_buffer_t *elastic = &st->elastic[program][stream_id];
+    packet_ref_t ref;
+
+    ref.program = program;
+    ref.stream_id = stream_id;
+    ref.seq = 0;
+    ref.data = NULL;
+    ref.size = 0;
+    ref.flags = PACKET_NONE;
+    ref.shape = PACKET_NONE;
+
+    if (elastic->audio_offset != -1)
+    {
+        packet_t* pkt = &elastic->packets[elastic->audio_offset];
+
+        ref.seq = elastic->audio_offset;
+        ref.data = pkt->data;
+        ref.size = pkt->size;
+        ref.flags = pkt->flags;
+        ref.shape = pkt->shape;
+    }
+
+    return ref;
+}
+
 void output_advance(output_t *st)
 {
-    unsigned int program, frame;
+    unsigned int program, stream_id, frame;
     unsigned int audio_frames = (st->radio->mode == NRSC5_MODE_FM ? 2 : 4);
 
     for (program = 0; program < MAX_PROGRAMS; program++)
     {
-        elastic_buffer_t *elastic = &st->elastic[program][0]; // TODO: Process enhanced stream
-
-        if (elastic->audio_offset == -1)
-            continue;
-
         for (frame = 0; frame < audio_frames; frame++)
         {
-            packet_t* pkt = &elastic->packets[elastic->audio_offset];
+            packet_ref_t core = collect_packet(st, program, 0);
+            packet_ref_t enh = collect_packet(st, program, 1);
 #ifdef USE_FAAD2
             int produced_audio = 0;
 #endif
 
-            if (pkt->size > 0)
+            if (core.size > 0)
             {
-                nrsc5_report_hdc(st->radio, program, pkt);
+                nrsc5_report_hdc(st->radio, program, &core, &enh);
             }
 
-            if (is_complete_pkt(pkt))
+            if (is_complete_pkt(&core))
             {
 #ifdef USE_FAAD2
                 void *buffer;
@@ -108,7 +128,7 @@ void output_advance(output_t *st)
                     NeAACDecInitHDC(&st->aacdec[program]);
                 }
 
-                buffer = NeAACDecDecode(st->aacdec[program], &info, pkt->data, pkt->size);
+                buffer = NeAACDecDecode(st->aacdec[program], &info, core.data, core.size);
                 if (info.error > 0)
                     log_error("Decode error: %s", NeAACDecGetErrorMessage(info.error));
 
@@ -127,18 +147,25 @@ void output_advance(output_t *st)
                 {
                     NeAACDecClose(st->aacdec[program]);
                     st->aacdec[program] = NULL;
-                }                
+                }
 #endif
             }
-
-            pkt_reset(pkt);
 
 #ifdef USE_FAAD2
             if (!produced_audio)
                 nrsc5_report_audio(st->radio, program, st->silence, NRSC5_AUDIO_FRAME_SAMPLES * 2);
 #endif
-    
-            elastic->audio_offset = (elastic->audio_offset + 1) % ELASTIC_BUFFER_LEN;
+
+            for (stream_id = 0; stream_id < MAX_STREAMS; stream_id++)
+            {
+                elastic_buffer_t *elastic = &st->elastic[program][stream_id];
+
+                if (elastic->audio_offset == -1)
+                    continue;
+
+                pkt_reset(&elastic->packets[elastic->audio_offset]);
+                elastic->audio_offset = (elastic->audio_offset + 1) % ELASTIC_BUFFER_LEN;
+            }
         }
     }
 }
