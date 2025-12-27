@@ -354,7 +354,7 @@ static void callback(const nrsc5_event_t *evt, void *opaque)
             if (st->audio_packets >= 32) {
                 log_info("Audio bit rate: %.1f kbps", (float)st->audio_bytes * 8 * NRSC5_SAMPLE_RATE_AUDIO / NRSC5_AUDIO_FRAME_SAMPLES / st->audio_packets / 1000);
                 if (st->audio_errors > 0)
-                    log_warn("CRC mismatch: %d/32", st->audio_errors);
+                    log_warn("CRC mismatch: %d/%d", st->audio_errors, st->audio_packets);
                 st->audio_packets = 0;
                 st->audio_bytes = 0;
                 st->audio_errors = 0;

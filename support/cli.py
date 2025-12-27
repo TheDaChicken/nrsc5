@@ -237,7 +237,7 @@ class NRSC5CLI:
                     logging.info("Audio bit rate: %.1f kbps", self.audio_bytes * 8 * nrsc5.SAMPLE_RATE_AUDIO
                                  / nrsc5.AUDIO_FRAME_SAMPLES / self.audio_packets / 1000)
                     if self.audio_errors > 0:
-                        logging.warning("CRC mismatch: %d/32", self.audio_errors)
+                        logging.warning("CRC mismatch: %d/%d", self.audio_errors, self.audio_packets)
                     self.audio_packets = 0
                     self.audio_bytes = 0
                     self.audio_errors = 0
