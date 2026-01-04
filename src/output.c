@@ -153,7 +153,9 @@ void output_advance(output_t *st)
                     NeAACDecInitHDC(&st->aacdec[program]);
                 }
 
-                buffer = NeAACDecDecode(st->aacdec[program], &info, core.data, core.size);
+                buffer = NeAACDecDecodeHDC(st->aacdec[program], &info,
+                    core.data, core.size,
+                    has_enh ? enh.data : NULL, has_enh ? enh.size : 0);
                 if (info.error > 0)
                     log_error("Decode error: %s", NeAACDecGetErrorMessage(info.error));
 
