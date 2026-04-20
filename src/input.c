@@ -157,6 +157,7 @@ void input_init(input_t *st, nrsc5_t *radio, output_t *output)
 void input_set_mode(input_t *st)
 {
     acquire_set_mode(&st->acq, st->radio->mode);
+    decode_mode_switch(&st->decode, st->radio->mode);
     input_reset(st);
 }
 

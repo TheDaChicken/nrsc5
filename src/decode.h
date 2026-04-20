@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "conv.h"
 #include "defines.h"
 #include "pids.h"
 
@@ -59,6 +60,11 @@ typedef struct
     uint8_t scrambler_p3_am[P3_FRAME_LEN_MA3];
 
     pids_t pids;
+
+    struct vdecoder vdecoder;
+    struct vtrellis trellis_p;
+    struct vtrellis trellis_e1;
+    struct vtrellis trellis_e2_e3;
 } decode_t;
 
 void decode_process_p1(decode_t *st);
@@ -74,6 +80,8 @@ void decode_push_px2(decode_t *st, const int8_t* sbit, unsigned int len, unsigne
 void decode_push_pl_pu_s_t(decode_t *st,
     const uint8_t* sym_pl, const uint8_t* sym_pu, const uint8_t* sym_s, const uint8_t* sym_t,
     unsigned int bc);
+
+void decode_mode_switch(decode_t *st, int mode);
 
 void decode_reset(decode_t *st);
 void decode_init(decode_t *st, struct input_t *input);

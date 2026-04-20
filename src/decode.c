@@ -15,7 +15,6 @@
 
 #include <string.h>
 
-#include "conv.h"
 #include "decode.h"
 #include "input.h"
 #include "pids.h"
@@ -405,7 +404,7 @@ void decode_push_px1(decode_t *st, const int8_t* sbit, const unsigned int len, c
 
             if (st->interleaver_px1.ready)
             {
-                nrsc5_conv_decode_p3_p4(st->viterbi_p3, st->scrambler_p3, len);
+                conv_decode(&st->vdecoder, &st->trellis_p, CONV_TERM_TAIL_BITING, st->viterbi_p3, st->scrambler_p3, len);
                 descramble(st->scrambler_p3, len);
                 frame_push(&st->input->frame, st->scrambler_p3, len, P3_LOGICAL_CHANNEL);
             }
@@ -428,7 +427,7 @@ void decode_push_px2(decode_t* st, const int8_t* sbit, const unsigned int len, c
 
             if (st->interleaver_px2.ready)
             {
-                nrsc5_conv_decode_p3_p4(st->viterbi_p4, st->scrambler_p4, len);
+                conv_decode(&st->vdecoder, &st->trellis_p, CONV_TERM_TAIL_BITING, st->viterbi_p4, st->scrambler_p4, len);
                 descramble(st->scrambler_p4, len);
                 frame_push(&st->input->frame, st->scrambler_p4, len, P4_LOGICAL_CHANNEL);
             }
@@ -454,7 +453,7 @@ void decode_process_p1(decode_t *st)
     interleaver_i(st->buffer_pm, st->viterbi_p1,
         J, B, C, M, PM_V, PM_V_SIZE, P1_FRAME_LEN_ENCODED_FM);
 
-    nrsc5_conv_decode_p1(st->viterbi_p1, st->scrambler_p1);
+    conv_decode(&st->vdecoder, &st->trellis_p, CONV_TERM_TAIL_BITING, st->viterbi_p1, st->scrambler_p1, P1_FRAME_LEN_FM);
     nrsc5_report_ber(st->input->radio, (float) bit_errors_2_5_fm(st->viterbi_p1, st->scrambler_p1, P1_FRAME_LEN_FM) / P1_FRAME_LEN_ENCODED_FM);
     descramble(st->scrambler_p1, P1_FRAME_LEN_FM);
     frame_push(&st->input->frame, st->scrambler_p1, P1_FRAME_LEN_FM, P1_LOGICAL_CHANNEL);
@@ -466,7 +465,7 @@ void decode_process_pids(decode_t *st, const unsigned int bc)
     interleaver_ii(st->buffer_pm, st->viterbi_pids, (int)bc, J, B, C, PM_V, PM_V_SIZE, PIDS_FRAME_LEN_ENCODED_FM,
         P1_FRAME_LEN_ENCODED_FM);
 
-    nrsc5_conv_decode_pids(st->viterbi_pids, st->scrambler_pids);
+    conv_decode(&st->vdecoder, &st->trellis_p, CONV_TERM_TAIL_BITING, st->viterbi_pids, st->scrambler_pids, PIDS_FRAME_LEN);
     descramble(st->scrambler_pids, PIDS_FRAME_LEN);
     pids_frame_push(&st->pids, st->scrambler_pids);
 }
@@ -499,7 +498,7 @@ void decode_process_pids_am(decode_t *st, const uint8_t* sbit)
       }
     }
 
-    nrsc5_conv_decode_e2_e3(st->viterbi_pids, st->scrambler_pids, PIDS_FRAME_LEN);
+    conv_decode(&st->vdecoder, &st->trellis_e2_e3, CONV_TERM_TAIL_BITING, st->viterbi_pids, st->scrambler_pids, PIDS_FRAME_LEN);
     descramble(st->scrambler_pids, PIDS_FRAME_LEN);
     pids_frame_push(&st->pids, st->scrambler_pids);
 }
@@ -511,7 +510,7 @@ void decode_process_p1_p3_am(decode_t *st, const unsigned int bc)
 
     if (st->am_diversity_wait == 0)
     {
-        nrsc5_conv_decode_e1(st->viterbi_p1_am + (bc * P1_FRAME_LEN_AM * 3), st->scrambler_p1_am, P1_FRAME_LEN_AM);
+        conv_decode(&st->vdecoder, &st->trellis_e1, CONV_TERM_TAIL_BITING, st->viterbi_p1_am + (bc * P1_FRAME_LEN_AM * 3), st->scrambler_p1_am, P1_FRAME_LEN_AM);
         st->am_errors += bit_errors_e1(st->viterbi_p1_am + (bc * P1_FRAME_LEN_AM * 3), st->scrambler_p1_am, P1_FRAME_LEN_AM);
         descramble(st->scrambler_p1_am, P1_FRAME_LEN_AM);
         frame_push(&st->input->frame, st->scrambler_p1_am, P1_FRAME_LEN_AM, P1_LOGICAL_CHANNEL);
@@ -525,7 +524,7 @@ void decode_process_p1_p3_am(decode_t *st, const unsigned int bc)
                 if (st->input->sync.psmi != SERVICE_MODE_MA3)
                 {
                     total_frame_length += P3_FRAME_LEN_ENCODED_MA1;
-                    nrsc5_conv_decode_e2_e3(st->viterbi_p3_am, st->scrambler_p3_am, P3_FRAME_LEN_MA1);
+                    conv_decode(&st->vdecoder, &st->trellis_e2_e3, CONV_TERM_TAIL_BITING, st->viterbi_p3_am, st->scrambler_p3_am, P3_FRAME_LEN_MA1);
                     st->am_errors += bit_errors_e2(st->viterbi_p3_am, st->scrambler_p3_am, P3_FRAME_LEN_MA1);
                     descramble(st->scrambler_p3_am, P3_FRAME_LEN_MA1);
                     frame_push(&st->input->frame, st->scrambler_p3_am, P3_FRAME_LEN_MA1, P3_LOGICAL_CHANNEL);
@@ -533,7 +532,7 @@ void decode_process_p1_p3_am(decode_t *st, const unsigned int bc)
                 else
                 {
                     total_frame_length += P3_FRAME_LEN_ENCODED_MA3;
-                    nrsc5_conv_decode_e1(st->viterbi_p3_am, st->scrambler_p3_am, P3_FRAME_LEN_MA3);
+                    conv_decode(&st->vdecoder, &st->trellis_e1, CONV_TERM_TAIL_BITING, st->viterbi_p3_am, st->scrambler_p3_am, P3_FRAME_LEN_MA3);
                     st->am_errors += bit_errors_e1(st->viterbi_p3_am, st->scrambler_p3_am, P3_FRAME_LEN_MA3);
                     descramble(st->scrambler_p3_am, P3_FRAME_LEN_MA3);
                     frame_push(&st->input->frame, st->scrambler_p3_am, P3_FRAME_LEN_MA3, P3_LOGICAL_CHANNEL);
@@ -567,6 +566,7 @@ void decode_reset(decode_t *st)
     st->started_pm = 0;
     st->am_errors = 0;
     st->am_diversity_wait = 4;
+
     interleaver_iv_reset(&st->interleaver_px1);
     interleaver_iv_reset(&st->interleaver_px2);
     pids_init(&st->pids, st->input);
@@ -574,6 +574,33 @@ void decode_reset(decode_t *st)
 
 void decode_init(decode_t *st, input_t *input)
 {
+    generate_trellis(&st->trellis_p, &conv_code_k7);
+    generate_trellis(&st->trellis_e1, &conv_code_e1);
+    generate_trellis(&st->trellis_e2_e3, &conv_code_e2_e3);
+
     st->input = input;
     decode_reset(st);
+    decode_mode_switch(st, NRSC5_MODE_FM);
+}
+
+void decode_mode_switch(decode_t *st, const int mode)
+{
+    if (mode == NRSC5_MODE_FM && st->vdecoder.k != conv_code_k7.k)
+    {
+        conv_free_paths(&st->vdecoder);
+        conv_alloc_vdec(&st->vdecoder, &conv_code_k7);
+    }
+    if (mode == NRSC5_MODE_AM && st->vdecoder.k != conv_code_e1.k)
+    {
+        conv_free_paths(&st->vdecoder);
+        conv_alloc_vdec(&st->vdecoder, &conv_code_e1);
+    }
+}
+
+void decode_free(decode_t *st)
+{
+    conv_free_paths(&st->vdecoder);
+    free_trellis(&st->trellis_p);
+    free_trellis(&st->trellis_e1);
+    free_trellis(&st->trellis_e2_e3);
 }

@@ -28,10 +28,51 @@ struct lte_conv_code {
 	int term;
 };
 
-int nrsc5_conv_decode_p1(const int8_t *in, uint8_t *out);
-int nrsc5_conv_decode_pids(const int8_t *in, uint8_t *out);
-int nrsc5_conv_decode_p3_p4(const int8_t *in, uint8_t *out, int len);
-int nrsc5_conv_decode_e1(const int8_t *in, uint8_t *out, int len);
-int nrsc5_conv_decode_e2_e3(const int8_t *in, uint8_t *out, int len);
+/*
+ * Trellis Object
+ *
+ * num_states - Number of states in the trellis
+ * sums       - Accumulated path metrics
+ * outputs    - Trellis ouput values
+ * vals       - Input value that led to each state
+ */
+struct vtrellis {
+	int n;
+	int k;
+	int num_states;
+	int16_t *sums;
+	int16_t *outputs;
+	uint8_t *vals;
+	int intrvl;
+};
+
+/*
+ * Viterbi Decoder
+ *
+ * n         - Code order
+ * k         - Constraint length
+ * len       - Horizontal length of trellis
+ * recursive - Set to '1' if the code is recursive
+ * intrvl    - Normalization interval
+ * trellis   - Trellis object
+ * punc      - Puncturing sequence
+ * paths     - Trellis paths
+ */
+struct vdecoder {
+	int n;
+	int k;
+	int len;
+	int recursive;
+	int *punc;
+	int16_t **paths;
+};
+
+int conv_alloc_vdec(struct vdecoder *dec, const struct lte_conv_code *code);
+void conv_free_paths(struct vdecoder *dec);
+
+int generate_trellis(struct vtrellis *trellis, const struct lte_conv_code *code);
+void free_trellis(struct vtrellis *trellis);
+
+int conv_decode(struct vdecoder *vdec, struct vtrellis *trellis, int term, const int8_t *in, uint8_t *out, unsigned int len);
 
 #endif /* _CONV_H_ */

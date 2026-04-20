@@ -54,47 +54,6 @@ struct vstate {
 };
 
 /*
- * Trellis Object
- *
- * num_states - Number of states in the trellis
- * sums       - Accumulated path metrics
- * outputs    - Trellis ouput values
- * vals       - Input value that led to each state
- */
-struct vtrellis {
-	int num_states;
-	int16_t *sums;
-	int16_t *outputs;
-	uint8_t *vals;
-};
-
-/*
- * Viterbi Decoder
- *
- * n         - Code order
- * k         - Constraint length
- * len       - Horizontal length of trellis
- * recursive - Set to '1' if the code is recursive
- * intrvl    - Normalization interval
- * trellis   - Trellis object
- * punc      - Puncturing sequence
- * paths     - Trellis paths
- */
-struct vdecoder {
-	int n;
-	int k;
-	int len;
-	int recursive;
-	int intrvl;
-	struct vtrellis *trellis;
-	int *punc;
-	int16_t **paths;
-
-	void (*metric_func)(const int8_t *, const int16_t *,
-			    int16_t *, int16_t *, int);
-};
-
-/*
  * Aligned Memory Allocator
  *
  * SSE requires 16-byte memory alignment. We store relevant trellis values
@@ -157,7 +116,7 @@ static void gen_state_info(const struct lte_conv_code *code,
  * Populate recursive trellis state
  */
 static void gen_rec_state_info(const struct lte_conv_code *code,
-			       uint8_t *val, unsigned reg, int16_t *out)
+			                   uint8_t *val, unsigned reg, int16_t *out)
 {
 	int i;
 	unsigned prev, rec, mask;
@@ -193,7 +152,7 @@ static void gen_rec_state_info(const struct lte_conv_code *code,
 }
 
 /* Release the trellis */
-static void free_trellis(struct vtrellis *trellis)
+void free_trellis(struct vtrellis *trellis)
 {
 	if (!trellis)
 		return;
@@ -201,10 +160,23 @@ static void free_trellis(struct vtrellis *trellis)
 	free(trellis->vals);
 	free(trellis->outputs);
 	free(trellis->sums);
-	free(trellis);
 }
 
 #define NUM_STATES(K)	(K == 9 ? 256 : (K == 7 ? 64 : 16))
+
+
+static int conv_decode_length(const int term, const int code_len, const int k)
+{
+	int out;
+
+	if (term == CONV_TERM_FLUSH)
+		out = code_len + k - 1;
+	else
+		out = code_len + TAIL_BITING_EXTRA * 2;
+
+	return out;
+}
+
 
 /*
  * Allocate and initialize the trellis object
@@ -214,22 +186,23 @@ static void free_trellis(struct vtrellis *trellis)
  * is used by the butterfly operation in the forward recursion, so only one
  * set of N outputs is required per state variable.
  */
-static struct vtrellis *generate_trellis(const struct lte_conv_code *code)
+int generate_trellis(struct vtrellis *trellis, const struct lte_conv_code *code)
 {
 	int i;
-	struct vtrellis *trellis;
 	int16_t *out;
 
-	int ns = NUM_STATES(code->k);
-	int olen = (code->n == 2) ? 2 : 4;
+	const int ns = NUM_STATES(code->k);
+	const int olen = (code->n == 2) ? 2 : 4;
 
-	trellis = (struct vtrellis *) calloc(1, sizeof(struct vtrellis));
 	trellis->num_states = ns;
 	trellis->sums =	vdec_malloc(ns);
 	trellis->outputs = vdec_malloc(ns * olen);
 	trellis->vals = (uint8_t *) malloc(ns * sizeof(uint8_t));
+	trellis->k = code->k;
+	trellis->n = code->n;
+	trellis->intrvl = INT16_MAX / (trellis->n * INT8_MAX) - trellis->k;
 
-	if (!trellis->sums || !trellis->outputs)
+	if (!trellis->sums || !trellis->outputs || !trellis->vals)
 		goto fail;
 
 	/* Populate the trellis state objects */
@@ -242,10 +215,9 @@ static struct vtrellis *generate_trellis(const struct lte_conv_code *code)
 			gen_state_info(code, &trellis->vals[i], i, out);
 	}
 
-	return trellis;
+	return 0;
 fail:
-	free_trellis(trellis);
-	return NULL;
+	return -1;
 }
 
 /*
@@ -256,41 +228,42 @@ fail:
  * Intialize with the maximum accumulated sum at length equal to the
  * constraint length.
  */
-static void reset_decoder(struct vdecoder *dec, int term)
+static void reset_trellis(const struct vtrellis* trellis, const int term)
 {
-	int ns = dec->trellis->num_states;
+	const int ns = trellis->num_states;
 
-	memset(dec->trellis->sums, 0, sizeof(int16_t) * ns);
+	memset(trellis->sums, 0, sizeof(int16_t) * ns);
 
 	if (term != CONV_TERM_TAIL_BITING)
-		dec->trellis->sums[0] = INT8_MAX * dec->n * dec->k;
+		trellis->sums[0] = INT8_MAX * trellis->n * trellis->k;
 }
 
-static int _traceback(struct vdecoder *dec,
-		       unsigned state, uint8_t *out, int len, int offset)
+static int _traceback(const struct vdecoder *dec,
+		              const struct vtrellis *trellis, unsigned state, uint8_t *out, int len, int offset)
 {
 	int i;
 	unsigned path;
 
 	for (i = len - 1; i >= 0; i--) {
 		path = dec->paths[i + offset][state] + 1;
-		out[i] = dec->trellis->vals[state];
-		state = vstate_lshift(state, dec->k, path);
+		out[i] = trellis->vals[state];
+		state = vstate_lshift(state, trellis->k, path);
 	}
 
 	return state;
 }
 
-static void _traceback_rec(struct vdecoder *dec,
-			   unsigned state, uint8_t *out, int len)
+static void _traceback_rec(const struct vdecoder *dec,
+			               const struct vtrellis *trellis,
+			               unsigned state, uint8_t *out, int len)
 {
 	int i;
 	unsigned path;
 
 	for (i = len - 1; i >= 0; i--) {
 		path = dec->paths[i][state] + 1;
-		out[i] = path ^ dec->trellis->vals[state];
-		state = vstate_lshift(state, dec->k, path);
+		out[i] = path ^ trellis->vals[state];
+		state = vstate_lshift(state, trellis->k, path);
 	}
 }
 
@@ -301,14 +274,21 @@ static void _traceback_rec(struct vdecoder *dec,
  * followed by two trace back passes. For zero flushing the final state is
  * always zero with a single traceback path.
  */
-static int traceback(struct vdecoder *dec, uint8_t *out, int term, int len)
+static int traceback(struct vdecoder *dec, const struct vtrellis *trellis, uint8_t *out, int term, const int len)
 {
 	int i, sum, max_p = -1, max = -1;
 	unsigned path, state = 0;
 
+	const int dec_len = conv_decode_length(term, len, trellis->k);
+	if (dec_len > dec->len)
+	{
+		log_error("Conv decoder length %d is too short for term %d and code length %d", dec->len, term, len);
+		return 0;
+	}
+
 	if (term == CONV_TERM_TAIL_BITING) {
-		for (i = 0; i < dec->trellis->num_states; i++) {
-			sum = dec->trellis->sums[i];
+		for (i = 0; i < trellis->num_states; i++) {
+			sum = trellis->sums[i];
 			if (sum > max) {
 				max_p = max;
 				max = sum;
@@ -317,21 +297,21 @@ static int traceback(struct vdecoder *dec, uint8_t *out, int term, int len)
 		}
 		if (max < 0)
 			return -EPROTO;
-		for (i = dec->len - 1; i >= len + TAIL_BITING_EXTRA; i--) {
+		for (i = dec_len - 1; i >= len + TAIL_BITING_EXTRA; i--) {
 			path = dec->paths[i][state] + 1;
-			state = vstate_lshift(state, dec->k, path);
+			state = vstate_lshift(state, trellis->k, path);
 		}
 	} else {
-		for (i = dec->len - 1; i >= len; i--) {
+		for (i = dec_len - 1; i >= len; i--) {
 			path = dec->paths[i][state] + 1;
-			state = vstate_lshift(state, dec->k, path);
+			state = vstate_lshift(state, trellis->k, path);
 		}
 	}
 
 	if (dec->recursive)
-		_traceback_rec(dec, state, out, len);
+		_traceback_rec(dec, trellis, state, out, len);
 	else
-		state =_traceback(dec, state, out, len, term == CONV_TERM_TAIL_BITING ? TAIL_BITING_EXTRA : 0);
+		state =_traceback(dec, trellis, state, out, len, term == CONV_TERM_TAIL_BITING ? TAIL_BITING_EXTRA : 0);
 
 	/* Don't handle the odd case of recursize tail-biting codes */
 
@@ -339,15 +319,14 @@ static int traceback(struct vdecoder *dec, uint8_t *out, int term, int len)
 }
 
 /* Release decoder object */
-static void free_vdec(struct vdecoder *dec)
+void conv_free_paths(struct vdecoder *dec)
 {
 	if (!dec)
 		return;
 
-	free(dec->paths[0]);
+	if (dec->paths)
+		free(dec->paths[0]);
 	free(dec->paths);
-	free_trellis(dec->trellis);
-	free(dec);
 }
 
 /*
@@ -356,40 +335,30 @@ static void free_vdec(struct vdecoder *dec)
  * Subtract the constraint length K on the normalization interval to
  * accommodate the initialization path metric at state zero.
  */
-static struct vdecoder *alloc_vdec(const struct lte_conv_code *code)
+int conv_alloc_vdec(struct vdecoder *dec, const struct lte_conv_code *code)
 {
-	int i, ns;
-	struct vdecoder *dec;
+	int i;
+	int ns = NUM_STATES(code->k);
 
-	ns = NUM_STATES(code->k);
-
-	dec = (struct vdecoder *) calloc(1, sizeof(struct vdecoder));
 	dec->n = code->n;
 	dec->k = code->k;
 	dec->recursive = code->rgen ? 1 : 0;
-	dec->intrvl = INT16_MAX / (dec->n * INT8_MAX) - dec->k;
 
-    assert(dec->n == 3);
     assert(dec->k == 7 || dec->k == 9);
 
-	if (code->term == CONV_TERM_FLUSH)
-		dec->len = code->len + code->k - 1;
-	else
-		dec->len = code->len + TAIL_BITING_EXTRA * 2;
-
-	dec->trellis = generate_trellis(code);
-	if (!dec->trellis)
+	dec->len = conv_decode_length(code->term, code->len, dec->k);
+	dec->paths = (int16_t **) malloc(sizeof(int16_t*) * dec->len);
+	if (!dec->paths)
 		goto fail;
-
-	dec->paths = (int16_t **) malloc(sizeof(int16_t *) * dec->len);
 	dec->paths[0] = vdec_malloc(ns * dec->len);
+	if (!dec->paths[0])
+		goto fail;
 	for (i = 1; i < dec->len; i++)
 		dec->paths[i] = &dec->paths[0][i * ns];
-
-	return dec;
+	return 0;
 fail:
-	free_vdec(dec);
-	return NULL;
+	conv_free_paths(dec);
+	return -1;
 }
 
 /*
@@ -399,80 +368,41 @@ fail:
  * accumulated path metric sums and path selections are stored. Normalize on
  * the interval specified by the decoder.
  */
-static void _conv_decode(struct vdecoder *dec, const int8_t *seq, int term, int len)
+static void _conv_decode(struct vdecoder *dec, struct vtrellis *trellis, const int8_t *seq, const int term, const int len)
 {
 	int i, j = 0;
-	struct vtrellis *trellis = dec->trellis;
 
 	if (term == CONV_TERM_TAIL_BITING)
 		j = len - TAIL_BITING_EXTRA;
 
-	for (i = 0; i < dec->len; i++, j++) {
+	if (trellis->k != dec->k)
+		return;
+
+	for (i = 0; i < conv_decode_length(term, len, trellis->k); i++, j++) {
 		if (term == CONV_TERM_TAIL_BITING && j == len)
 			j = 0;
 
-		if (dec->k == 7)
-			gen_metrics_k7_n3(&seq[dec->n * j],
+		if (trellis->k == 7)
+			gen_metrics_k7_n3(&seq[trellis->n * j],
 					 trellis->outputs,
 					 trellis->sums,
 					 dec->paths[i],
-					 !(i % dec->intrvl));
-		else if (dec->k == 9)
-			gen_metrics_k9_n3(&seq[dec->n * j],
+					 !(i % trellis->intrvl));
+		else if (trellis->k == 9)
+			gen_metrics_k9_n3(&seq[trellis->n * j],
 					 trellis->outputs,
 					 trellis->sums,
 					 dec->paths[i],
-					 !(i % dec->intrvl));
+					 !(i % trellis->intrvl));
 	}
 }
 
-static int nrsc5_conv_decode(const int8_t *in, uint8_t *out, int k, int len, unsigned int g1, unsigned int g2, unsigned int g3)
+int conv_decode(struct vdecoder *vdec, struct vtrellis *trellis, const int term, const int8_t *in, uint8_t *out, const unsigned int len)
 {
-	const struct lte_conv_code code = {
-		.n = 3,
-		.k = k,
-		.len = len,
-		.gen = { g1, g2, g3 },
-		.term = CONV_TERM_TAIL_BITING,
-	};
-	int rc;
-
-	struct vdecoder *vdec = alloc_vdec(&code);
-	if (!vdec)
-		return -EFAULT;
-
-	reset_decoder(vdec, code.term);
+	reset_trellis(trellis, term);
 
 	/* Propagate through the trellis with interval normalization */
-	_conv_decode(vdec, in, code.term, code.len);
+	_conv_decode(vdec, trellis, in, term, len);
 
-	rc = traceback(vdec, out, code.term, code.len);
-
-	free_vdec(vdec);
-	return rc;
-}
-
-int nrsc5_conv_decode_p1(const int8_t *in, uint8_t *out)
-{
-	return nrsc5_conv_decode(in, out, 7, P1_FRAME_LEN_FM, 0133, 0171, 0165);
-}
-
-int nrsc5_conv_decode_pids(const int8_t *in, uint8_t *out)
-{
-	return nrsc5_conv_decode(in, out, 7, PIDS_FRAME_LEN, 0133, 0171, 0165);
-}
-
-int nrsc5_conv_decode_p3_p4(const int8_t *in, uint8_t *out, int len)
-{
-	return nrsc5_conv_decode(in, out, 7, len, 0133, 0171, 0165);
-}
-
-int nrsc5_conv_decode_e1(const int8_t *in, uint8_t *out, int len)
-{
-  return nrsc5_conv_decode(in, out, 9, len, 0561, 0657, 0711);
-}
-
-int nrsc5_conv_decode_e2_e3(const int8_t *in, uint8_t *out, int len)
-{
-  return nrsc5_conv_decode(in, out, 9, len, 0561, 0753, 0711);
+	return traceback(vdec, trellis, out, term, len);
 }
