@@ -481,19 +481,21 @@ void sync_process_fm(sync_t *st)
         {
             input_set_sync_state(st->input, SYNC_STATE_COARSE);
             st->samperr = 0;
-            return;
+            st->angle = 0;
+        }
+        else
+        {
+            st->samperr = roundf(samperr / (float)vaid_sidebands);
+            st->angle = angle / (float)vaid_sidebands;
+            for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM + 1; i += PARTITION_WIDTH_FM)
+            {
+                st->costas_freq[LB_START + i] -= st->angle;
+                st->costas_freq[UB_END - i] -= st->angle;
+            }
         }
 
-        st->samperr = roundf(samperr / (float)vaid_sidebands);
         st->prev_samperr_ub = samperr_ub;
         st->prev_samperr_lb = samperr_lb;
-
-        st->angle = angle / (float)vaid_sidebands;
-        for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM + 1; i += PARTITION_WIDTH_FM)
-        {
-            st->costas_freq[LB_START + i] -= st->angle;
-            st->costas_freq[UB_END - i] -= st->angle;
-        }
 
         // Calculate modulation error
         float error_lb = 0, error_ub = 0;
