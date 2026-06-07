@@ -18,6 +18,8 @@ typedef struct
     int cfo_wait;
     unsigned int bc;
     unsigned int offset_history;
+    float prev_samperr_lb;
+    float prev_samperr_ub;
     int samperr;
     float angle;
 

@@ -423,17 +423,19 @@ void sync_process_fm(sync_t *st)
     // if we are still synchronized
     if (st->input->sync_state == SYNC_STATE_FINE)
     {
-        float samperr = 0, angle = 0;
-        float sum_xy = 0, sum_x2 = 0;
+        float samperr_lb = 0, samperr_ub = 0, angle_lb = 0, angle_ub = 0;
+        float sum_xy_lb = 0, sum_x2_lb = 0;
+        float sum_xy_ub = 0, sum_x2_ub = 0;
         for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM; i += PARTITION_WIDTH_FM)
         {
             adjust_data(st, LB_START + i, LB_START + i + PARTITION_WIDTH_FM);
             adjust_data(st, UB_END - i - PARTITION_WIDTH_FM, UB_END - i);
 
-            samperr += phase_diff(st->phases[LB_START + i][0], st->phases[LB_START + i + PARTITION_WIDTH_FM][0]);
-            samperr += phase_diff(st->phases[UB_END - i - PARTITION_WIDTH_FM][0], st->phases[UB_END - i][0]);
+            samperr_lb += phase_diff(st->phases[LB_START + i][0], st->phases[LB_START + i + PARTITION_WIDTH_FM][0]);
+            samperr_ub += phase_diff(st->phases[UB_END - i - PARTITION_WIDTH_FM][0], st->phases[UB_END - i][0]);
         }
-        samperr = samperr / (partitions_per_band * 2) * FFT_FM / PARTITION_WIDTH_FM / (2 * M_PI);
+        samperr_lb = samperr_lb / (float)partitions_per_band * FFT_FM / PARTITION_WIDTH_FM / (2 * M_PI);
+        samperr_ub = samperr_ub / (float)partitions_per_band * FFT_FM / PARTITION_WIDTH_FM / (2 * M_PI);
 
         for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM + 1; i += PARTITION_WIDTH_FM)
         {
@@ -441,25 +443,56 @@ void sync_process_fm(sync_t *st)
 
             x = LB_START + i - (FFT_FM / 2);
             y = st->costas_freq[LB_START + i];
-            angle += y;
-            sum_xy += x * y;
-            sum_x2 += x * x;
+            angle_lb += y;
+            sum_xy_lb += x * y;
+            sum_x2_lb += x * x;
 
             x = UB_END - i - (FFT_FM / 2);
             y = st->costas_freq[UB_END - i];
-            angle += y;
-            sum_xy += x * y;
-            sum_x2 += x * x;
+            angle_ub += y;
+            sum_xy_ub += x * y;
+            sum_x2_ub += x * x;
         }
-        samperr -= (sum_xy / sum_x2) * FFT_FM / (2 * M_PI) * ACQUIRE_SYMBOLS;
-        st->samperr = roundf(samperr);
+        samperr_lb -= (sum_xy_lb / sum_x2_lb) * FFT_FM / (2 * M_PI) * ACQUIRE_SYMBOLS;
+        samperr_ub -= (sum_xy_ub / sum_x2_ub) * FFT_FM / (2 * M_PI) * ACQUIRE_SYMBOLS;
 
-        angle /= (partitions_per_band + 1) * 2;
-        st->angle = angle;
+        angle_lb /= (float)(partitions_per_band + 1);
+        angle_ub /= (float)(partitions_per_band + 1);
+
+        float samperr = 0;
+        float angle = 0;
+        int vaid_sidebands = 0;
+
+        if (fabsf(st->prev_samperr_lb - samperr_lb) < 10)
+        {
+            samperr += samperr_lb;
+            angle += angle_lb;
+            vaid_sidebands++;
+        }
+
+        if (fabsf(st->prev_samperr_ub - samperr_ub) < 10)
+        {
+            samperr += samperr_ub;
+            angle += angle_ub;
+            vaid_sidebands++;
+        }
+
+        if (vaid_sidebands == 0)
+        {
+            input_set_sync_state(st->input, SYNC_STATE_COARSE);
+            st->samperr = 0;
+            return;
+        }
+
+        st->samperr = roundf(samperr / (float)vaid_sidebands);
+        st->prev_samperr_ub = samperr_ub;
+        st->prev_samperr_lb = samperr_lb;
+
+        st->angle = angle / (float)vaid_sidebands;
         for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM + 1; i += PARTITION_WIDTH_FM)
         {
-            st->costas_freq[LB_START + i] -= angle;
-            st->costas_freq[UB_END - i] -= angle;
+            st->costas_freq[LB_START + i] -= st->angle;
+            st->costas_freq[UB_END - i] -= st->angle;
         }
 
         // Calculate modulation error
@@ -827,6 +860,8 @@ void sync_reset(sync_t *st)
     st->mer_cnt = 0;
     st->error_lb = 0;
     st->error_ub = 0;
+    st->prev_samperr_lb = 0;
+    st->prev_samperr_ub = 0;
 }
 
 void sync_init(sync_t *st, input_t *input)
