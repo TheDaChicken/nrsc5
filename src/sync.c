@@ -456,18 +456,24 @@ void sync_process_fm(sync_t *st)
         samperr_lb -= (sum_xy_lb / sum_x2_lb) * FFT_FM / (2 * M_PI) * ACQUIRE_SYMBOLS;
         samperr_ub -= (sum_xy_ub / sum_x2_ub) * FFT_FM / (2 * M_PI) * ACQUIRE_SYMBOLS;
 
+        //printf("after coastas samperr_lb: %0.1f, after coastas samperr_ub: %0.1f\n", samperr_lb, samperr_ub);
+
+
         angle_lb /= (float)(partitions_per_band + 1);
         angle_ub /= (float)(partitions_per_band + 1);
 
         float samperr = 0;
         float angle = 0;
         int vaid_sidebands = 0;
+        int valid_lb = 0;
+        int valid_ub = 0;
 
         if (fabsf(st->prev_samperr_lb - samperr_lb) < 10)
         {
             samperr += samperr_lb;
             angle += angle_lb;
             vaid_sidebands++;
+            valid_lb = 1;
         }
 
         if (fabsf(st->prev_samperr_ub - samperr_ub) < 10)
@@ -475,6 +481,7 @@ void sync_process_fm(sync_t *st)
             samperr += samperr_ub;
             angle += angle_ub;
             vaid_sidebands++;
+            valid_ub = 1;
         }
 
         if (vaid_sidebands == 0)
@@ -536,8 +543,14 @@ void sync_process_fm(sync_t *st)
         }
 
         // Soft demod based on MER for each sideband
-        const float mer_lb = 2.0f * BLKSZ * (float)(partitions_per_band * PARTITION_DATA_CARRIERS) / error_lb;
-        const float mer_ub = 2.0f * BLKSZ * (float)(partitions_per_band * PARTITION_DATA_CARRIERS) / error_ub;
+        float mer_lb = 2.0f * BLKSZ * (float)(partitions_per_band * PARTITION_DATA_CARRIERS) / error_lb;
+        float mer_ub = 2.0f * BLKSZ * (float)(partitions_per_band * PARTITION_DATA_CARRIERS) / error_ub;
+
+        if (!valid_lb)
+            mer_lb = 0;
+        if (!valid_ub)
+            mer_ub = 0;
+
         const float mult_lb = fmaxf(fminf(mer_lb * 10, 127), 1);
         const float mult_ub = fmaxf(fminf(mer_ub * 10, 127), 1);
 
