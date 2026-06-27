@@ -268,13 +268,23 @@ static void adjust_data(sync_t *st, unsigned int lower, unsigned int upper)
 
     for (int n = 0; n < BLKSZ; n++)
     {
-        float complex upper_phase = cexpf(st->phases[upper][n] * I);
-        float complex lower_phase = cexpf(st->phases[lower][n] * I);
+        float mag_inc = (smag19 - smag0) / PARTITION_WIDTH_FM;
+        float mag_acc = smag0;
+
+        float phase_diff = st->phases[upper][n] - st->phases[lower][n];
+        if (phase_diff > M_PI)
+            phase_diff -= 2 * M_PI;
+        else if (phase_diff < -M_PI)
+            phase_diff += 2 * M_PI;
+        float complex phase_inc = cexpf(I * phase_diff / PARTITION_WIDTH_FM);
+        float complex phase_acc = cexpf(st->phases[lower][n] * I);
 
         for (int k = 1; k < PARTITION_WIDTH_FM; k++)
         {
             // average phase difference
-            float complex C = CMPLXF(PARTITION_WIDTH_FM, PARTITION_WIDTH_FM) / (k * smag19 * upper_phase + (PARTITION_WIDTH_FM - k) * smag0 * lower_phase);
+            mag_acc += mag_inc;
+            phase_acc *= phase_inc;
+            float complex C = CMPLXF(1, 1) / (mag_acc * phase_acc);
             // adjust sample
             st->buffer[lower + k][n] *= C;
         }
