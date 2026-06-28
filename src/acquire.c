@@ -25,40 +25,47 @@
 #define DECIMATION_FACTOR_FM 2
 #define DECIMATION_FACTOR_AM 32
 
-static float filter_taps_fm[] = {
-    -0.000685643230099231,
-    0.005636964458972216,
-    0.009015781804919243,
-    -0.015486305579543114,
-    -0.035108357667922974,
-    0.017446253448724747,
-    0.08155813068151474,
-    0.007995186373591423,
-    -0.13311293721199036,
-    -0.0727422907948494,
-    0.15914097428321838,
-    0.16498781740665436,
-    -0.1324498951435089,
-    -0.2484012246131897,
-    0.051773931831121445,
-    0.2821577787399292,
-    0.051773931831121445,
-    -0.2484012246131897,
-    -0.1324498951435089,
-    0.16498781740665436,
-    0.15914097428321838,
-    -0.0727422907948494,
-    -0.13311293721199036,
-    0.007995186373591423,
-    0.08155813068151474,
-    0.017446253448724747,
-    -0.035108357667922974,
-    -0.015486305579543114,
-    0.009015781804919243,
-    0.005636964458972216,
-    -0.000685643230099231,
-    0
+// start: 10000hz end: 163890hz
+static float complex filter_lower_taps_fm[] = {
+    (0.0001491737348260358-0.00023344348301179707j),
+    (0.0006922566099092364+7.773741526762024e-05j),
+    (0.00032526138238608837+0.0009051971137523651j),
+    (-0.0003446308837737888+0.00035608699545264244j),
+    (0.001513275085017085+0.0004885241505689919j),
+    (0.0009233292075805366+0.006344289518892765j),
+    (-0.01246884185820818+0.008554373867809772j),
+    (-0.02495468407869339-0.014047245495021343j),
+    (0.002645110944285989-0.04725700244307518j),
+    (0.06516436487436295-0.027618050575256348j),
+    (0.07382321357727051+0.0638570562005043j),
+    (-0.031845834106206894+0.12149399518966675j),
+    (-0.14885567128658295+0.030241960659623146j),
+    (-0.10598291456699371-0.137343630194664j),
+    (0.08277542144060135-0.16842930018901825j),
+    (0.19261953234672546+3.2146851935976883e-07j),
+    (0.08277485519647598+0.16842956840991974j),
+    (-0.10598336905241013+0.13734328746795654j),
+    (-0.14885558187961578-0.03024245798587799j),
+    (-0.03184542432427406-0.1214940994977951j),
+    (0.07382342964410782-0.0638568103313446j),
+    (0.06516426801681519+0.02761826664209366j),
+    (0.0026449530851095915+0.047257013618946075j),
+    (-0.024954723194241524+0.014047173783183098j),
+    (-0.01246881764382124-0.008554410189390182j),
+    (0.0009233473101630807-0.006344286724925041j),
+    (0.0015132765984162688-0.0004885198432020843j),
+    (-0.0003446298942435533-0.00035608798498287797j),
+    (0.000325263972626999-0.0009051961824297905j),
+    (0.0006922568427398801-7.773543620714918e-05j),
+    (0.00014917329826857895+0.00023344377405010164j),
+    (0.0+0.0j)
 };
+
+// start: -163890hz end: -10000hz
+static float complex filter_upper_taps_fm[] = {
+    (0.0001491737348260358+0.00023344348301179707j),(0.0006922566099092364-7.773741526762024e-05j),(0.00032526138238608837-0.0009051971137523651j),(-0.0003446308837737888-0.00035608699545264244j),(0.001513275085017085-0.0004885241505689919j),(0.0009233292075805366-0.006344289518892765j),(-0.01246884185820818-0.008554373867809772j),(-0.02495468407869339+0.014047245495021343j),(0.002645110944285989+0.04725700244307518j),(0.06516436487436295+0.027618050575256348j),(0.07382321357727051-0.0638570562005043j),(-0.031845834106206894-0.12149399518966675j),(-0.14885567128658295-0.030241960659623146j),(-0.10598291456699371+0.137343630194664j),(0.08277542144060135+0.16842930018901825j),(0.19261953234672546-3.2146851935976883e-07j),(0.08277485519647598-0.16842956840991974j),(-0.10598336905241013-0.13734328746795654j),(-0.14885558187961578+0.03024245798587799j),(-0.03184542432427406+0.1214940994977951j),(0.07382342964410782+0.0638568103313446j),(0.06516426801681519-0.02761826664209366j),(0.0026449530851095915-0.047257013618946075j),(-0.024954723194241524-0.014047173783183098j),(-0.01246881764382124+0.008554410189390182j),(0.0009233473101630807+0.006344286724925041j),(0.0015132765984162688+0.0004885198432020843j),(-0.0003446298942435533+0.00035608798498287797j),(0.000325263972626999+0.0009051961824297905j),(0.0006922568427398801+7.773543620714918e-05j),(0.00014917329826857895-0.00023344377405010164j),(0.0+0.0j)
+};
+
 
 static float filter_taps_am[] = {
     -0.00038464731187559664,
@@ -95,10 +102,39 @@ static float filter_taps_am[] = {
     0
 };
 
+void peak_mag(acquire_t *st, float* max_mag, float complex* max_v, int *samperr)
+{
+    int i, j;
+
+    memset(st->sums, 0, sizeof(float complex) * st->fftcp);
+    for (i = 0; i < st->fftcp; ++i)
+    {
+        for (j = 0; j < ACQUIRE_SYMBOLS; ++j)
+            st->sums[i] += st->buffer[i + j * st->fftcp] * conjf(st->buffer[i + j * st->fftcp + st->fft]);
+    }
+
+    for (i = 0; i < st->fftcp; ++i)
+    {
+        float mag;
+        float complex v = 0;
+
+        for (j = 0; j < st->cp; ++j)
+            v += st->sums[(i + j) % st->fftcp] * st->shape[j] * st->shape[j + st->fft];
+
+        mag = normf(v);
+        if (mag > *max_mag)
+        {
+            *max_mag = mag;
+            *max_v = v;
+            *samperr = (i + st->fftcp - FILTER_DELAY) % st->fftcp;
+        }
+    }
+}
+
 void acquire_process(acquire_t *st)
 {
     float complex max_v = 0, phase_increment;
-    float angle, angle_diff, angle_factor, max_mag = -1.0f;
+    float angle, angle_diff, angle_factor;
     int samperr = 0;
     int i, j, keep;
 
@@ -119,35 +155,38 @@ void acquire_process(acquire_t *st)
     }
     else
     {
+        float complex max_v_lb = 0, max_v_ub = 0;
+        float max_mag_lb = -1.0f, max_mag_ub = -1.0f;
+        int samperr_lb, samperr_ub = 0;
+
         float complex y;
         for (i = 0; i < st->fftcp * (ACQUIRE_SYMBOLS + 1); i++)
         {
-            fir_cf32_execute((st->mode == NRSC5_MODE_FM) ? st->filter_fm : st->filter_am, &st->in_buffer[i], &y);
+            fir_cf32_c_execute((st->mode == NRSC5_MODE_FM) ? st->filter_fm_lower : st->filter_am, &st->in_buffer[i], &y);
             st->buffer[i] = (st->mode == NRSC5_MODE_FM) ? conjf(y) : y;
         }
 
-        memset(st->sums, 0, sizeof(float complex) * st->fftcp);
-        for (i = 0; i < st->fftcp; ++i)
+        peak_mag(st, &max_mag_lb, &max_v_lb, &samperr_lb);
+        printf("lower: max_mag: %0.4f samperr: %d\n", max_mag_lb, samperr_lb);
+
+        for (i = 0; i < st->fftcp * (ACQUIRE_SYMBOLS + 1); i++)
         {
-            for (j = 0; j < ACQUIRE_SYMBOLS; ++j)
-                st->sums[i] += st->buffer[i + j * st->fftcp] * conjf(st->buffer[i + j * st->fftcp + st->fft]);
+            fir_cf32_c_execute((st->mode == NRSC5_MODE_FM) ? st->filter_fm_upper : st->filter_am, &st->in_buffer[i], &y);
+            st->buffer[i] = (st->mode == NRSC5_MODE_FM) ? conjf(y) : y;
         }
 
-        for (i = 0; i < st->fftcp; ++i)
+        peak_mag(st, &max_mag_ub, &max_v_ub, &samperr_ub);
+        printf("upper: max_mag: %0.4f samperr: %d\n", max_mag_ub, samperr_ub);
+
+        if (max_mag_ub > max_mag_lb)
         {
-            float mag;
-            float complex v = 0;
-
-            for (j = 0; j < st->cp; ++j)
-                v += st->sums[(i + j) % st->fftcp] * st->shape[j] * st->shape[j + st->fft];
-
-            mag = normf(v);
-            if (mag > max_mag)
-            {
-                max_mag = mag;
-                max_v = v;
-                samperr = (i + st->fftcp - FILTER_DELAY) % st->fftcp;
-            }
+            max_v = max_v_ub;
+            samperr = samperr_ub;
+        }
+        else
+        {
+            max_v = max_v_lb;
+            samperr = samperr_lb;
         }
 
         angle_diff = cargf(max_v * cexpf(I * -st->prev_angle));
@@ -289,7 +328,7 @@ unsigned int acquire_push(acquire_t *st, const float complex *buf, const unsigne
 
 void acquire_reset(acquire_t *st)
 {
-    firdecim_cf32_reset(st->filter_fm);
+    firdecim_cf32_reset(st->filter_fm_lower);
     firdecim_cf32_reset(st->filter_am);
     st->idx = 0;
     st->prev_angle = 0;
@@ -309,7 +348,9 @@ void acquire_init(acquire_t *st, input_t *input)
 
     st->input = input;
 
-    st->filter_fm = firdecim_cf32_create(filter_taps_fm, sizeof(filter_taps_fm) / sizeof(filter_taps_fm[0]));
+    st->filter_fm_lower = firdecim_cf32_c_create(filter_lower_taps_fm, sizeof(filter_lower_taps_fm) / sizeof(filter_lower_taps_fm[0]));
+    st->filter_fm_upper = firdecim_cf32_c_create(filter_upper_taps_fm, sizeof(filter_upper_taps_fm) / sizeof(filter_upper_taps_fm[0]));
+
     st->filter_am = firdecim_cf32_create(filter_taps_am, sizeof(filter_taps_am) / sizeof(filter_taps_am[0]));
 
     pthread_mutex_lock(&fftw_mutex);
@@ -368,7 +409,7 @@ void acquire_set_mode(acquire_t *st, int mode)
 
 void acquire_free(acquire_t *st)
 {
-    firdecim_cf32_free(st->filter_fm);
+    firdecim_cf32_free(st->filter_fm_lower);
     firdecim_cf32_free(st->filter_am);
 
     pthread_mutex_lock(&fftw_mutex);

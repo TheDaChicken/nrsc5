@@ -33,6 +33,27 @@ firdecim_cf32 firdecim_cf32_create(const float * taps, unsigned int ntaps)
     return q;
 }
 
+firdecim_cf32 firdecim_cf32_c_create(const float complex * taps, unsigned int ntaps)
+{
+    firdecim_cf32 q;
+
+    q = malloc(sizeof(*q));
+    q->ntaps = (ntaps == 32) ? 32 : 15;
+    q->taps = malloc(sizeof(float complex) * ntaps);
+    q->window = calloc(WINDOW_SIZE, sizeof(float complex));
+    firdecim_cf32_reset(q);
+
+    float complex* out = (float complex*)q->taps;
+
+    // reverse order so we can push into the window
+    for (unsigned int i = 0; i < ntaps; ++i)
+    {
+        out[i] = taps[ntaps - 1 - i];
+    }
+
+    return q;
+}
+
 void firdecim_cf32_free(firdecim_cf32 q)
 {
     free(q->taps);
@@ -70,6 +91,17 @@ static float complex dotprod_32(const float complex *a, const float *b)
     return sum;
 }
 
+static float complex dotprod_32_c(const float complex *a, const float complex *b)
+{
+    float complex sum = { 0 };
+    int i;
+
+    for (i = 0; i < 32; i++)
+        sum += a[i] * b[i];
+
+    return sum;
+}
+
 static float complex dotprod_halfband_4(const float complex *a, const float *b)
 {
     float complex sum = { 0 };
@@ -88,6 +120,12 @@ void fir_cf32_execute(firdecim_cf32 q, const float complex *x, float complex *y)
 {
     push(q, x[0]);
     *y = dotprod_32(&q->window[q->idx - q->ntaps], q->taps);
+}
+
+void fir_cf32_c_execute(firdecim_cf32 q, const float complex *x, float complex *y)
+{
+    push(q, x[0]);
+    *y = dotprod_32_c(&q->window[q->idx - q->ntaps], (float complex*) q->taps);
 }
 
 void halfband_cf32_execute(firdecim_cf32 q, const float complex *x, float complex *y)

@@ -7,7 +7,8 @@
 typedef struct
 {
     struct input_t *input;
-    firdecim_cf32 filter_fm;
+    firdecim_cf32 filter_fm_lower;
+    firdecim_cf32 filter_fm_upper;
     firdecim_cf32 filter_am;
     float complex in_buffer[FFTCP_FM * (ACQUIRE_SYMBOLS + 1)];
     float complex buffer[FFTCP_FM * (ACQUIRE_SYMBOLS + 1)];

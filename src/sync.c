@@ -466,8 +466,12 @@ void sync_process_fm(sync_t *st)
         samperr_lb -= (sum_xy_lb / sum_x2_lb) * FFT_FM / (2 * M_PI) * ACQUIRE_SYMBOLS;
         samperr_ub -= (sum_xy_ub / sum_x2_ub) * FFT_FM / (2 * M_PI) * ACQUIRE_SYMBOLS;
 
-        //printf("after coastas samperr_lb: %0.1f, after coastas samperr_ub: %0.1f\n", samperr_lb, samperr_ub);
+        // for (i = 1; i < partitions_per_band * PARTITION_WIDTH_FM; i += PARTITION_WIDTH_FM)
+        // {
+        //     st->phases[LB_START + i];
+        // }
 
+        //printf("after coastas samperr_lb: %0.1f, after coastas samperr_ub: %0.1f\n", samperr_lb, samperr_ub);
 
         angle_lb /= (float)(partitions_per_band + 1);
         angle_ub /= (float)(partitions_per_band + 1);
@@ -493,6 +497,9 @@ void sync_process_fm(sync_t *st)
             vaid_sidebands++;
             valid_ub = 1;
         }
+
+        if (vaid_sidebands == 1)
+            printf("using one sideband\n");
 
         if (vaid_sidebands == 0)
         {
