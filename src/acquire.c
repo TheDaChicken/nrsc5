@@ -142,7 +142,7 @@ void acquire_process(acquire_t *st)
         for (i = 0; i < st->fftcp * (ACQUIRE_SYMBOLS + 1); i++)
         {
             fir_cf32_c_execute((st->mode == NRSC5_MODE_FM) ? st->filter_fm_upper : st->filter_am, &st->in_buffer[i], &y);
-            fwrite(&y, sizeof(float complex), 1, f);
+            //fwrite(&y, sizeof(float complex), 1, f);
             st->buffer[i] = (st->mode == NRSC5_MODE_FM) ? conjf(y) : y;
         }
 
