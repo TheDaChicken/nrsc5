@@ -151,7 +151,7 @@ void acquire_process(acquire_t *st)
         peak_mag(st, &max_mag_ub, &max_v_ub, &samperr_ub);
         printf("upper: max_mag: %0.4f samperr: %d\n", max_mag_ub, samperr_ub);
 
-        if (max_mag_ub > max_mag_lb)
+        if (max_mag_ub < max_mag_lb)
         {
             max_v = max_v_ub;
             samperr = samperr_ub;
