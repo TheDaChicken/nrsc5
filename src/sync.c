@@ -476,50 +476,16 @@ void sync_process_fm(sync_t *st)
         angle_lb /= (float)(partitions_per_band + 1);
         angle_ub /= (float)(partitions_per_band + 1);
 
-        float samperr = 0;
-        float angle = 0;
-        int vaid_sidebands = 0;
-        int valid_lb = 0;
-        int valid_ub = 0;
+        float samperr = (samperr_lb + samperr_ub) / 2;
+        float angle = (angle_lb + angle_ub) / 2;
 
-        if (fabsf(st->prev_samperr_lb - samperr_lb) < 10)
+        st->samperr = roundf(samperr);
+        st->angle = angle;
+        for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM + 1; i += PARTITION_WIDTH_FM)
         {
-            samperr += samperr_lb;
-            angle += angle_lb;
-            vaid_sidebands++;
-            valid_lb = 1;
+            st->costas_freq[LB_START + i] -= st->angle;
+            st->costas_freq[UB_END - i] -= st->angle;
         }
-
-        if (fabsf(st->prev_samperr_ub - samperr_ub) < 10)
-        {
-            samperr += samperr_ub;
-            angle += angle_ub;
-            vaid_sidebands++;
-            valid_ub = 1;
-        }
-
-        if (vaid_sidebands == 1)
-            printf("using one sideband\n");
-
-        if (vaid_sidebands == 0)
-        {
-            input_set_sync_state(st->input, SYNC_STATE_COARSE);
-            st->samperr = 0;
-            st->angle = 0;
-        }
-        else
-        {
-            st->samperr = roundf(samperr / (float)vaid_sidebands);
-            st->angle = angle / (float)vaid_sidebands;
-            for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM + 1; i += PARTITION_WIDTH_FM)
-            {
-                st->costas_freq[LB_START + i] -= st->angle;
-                st->costas_freq[UB_END - i] -= st->angle;
-            }
-        }
-
-        st->prev_samperr_ub = samperr_ub;
-        st->prev_samperr_lb = samperr_lb;
 
         // Calculate modulation error
         float error_lb = 0, error_ub = 0;
@@ -562,11 +528,6 @@ void sync_process_fm(sync_t *st)
         // Soft demod based on MER for each sideband
         float mer_lb = 2.0f * BLKSZ * (float)(partitions_per_band * PARTITION_DATA_CARRIERS) / error_lb;
         float mer_ub = 2.0f * BLKSZ * (float)(partitions_per_band * PARTITION_DATA_CARRIERS) / error_ub;
-
-        if (!valid_lb)
-            mer_lb = 0;
-        if (!valid_ub)
-            mer_ub = 0;
 
         const float mult_lb = fmaxf(fminf(mer_lb * 10, 127), 1);
         const float mult_ub = fmaxf(fminf(mer_ub * 10, 127), 1);
@@ -892,8 +853,6 @@ void sync_reset(sync_t *st)
     st->mer_cnt = 0;
     st->error_lb = 0;
     st->error_ub = 0;
-    st->prev_samperr_lb = 0;
-    st->prev_samperr_ub = 0;
 }
 
 void sync_init(sync_t *st, input_t *input)

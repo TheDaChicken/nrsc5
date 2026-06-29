@@ -33,7 +33,7 @@ firdecim_cf32 firdecim_cf32_create(const float * taps, unsigned int ntaps)
     return q;
 }
 
-firdecim_cf32 firdecim_cf32_c_create(const float complex * taps, unsigned int ntaps)
+firdecim_cf32 firdecim_cf32_c_create(const float complex *taps, unsigned int ntaps)
 {
     firdecim_cf32 q;
 
