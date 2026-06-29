@@ -135,9 +135,9 @@ void acquire_process(acquire_t *st)
         }
 
         peak_mag(st, &max_mag_lb, &max_v_lb, &samperr_lb);
-        printf("lower: max_mag: %0.4f samperr: %d\n", max_mag_lb, samperr_lb);
+        //printf("lower: max_mag: %0.4f samperr: %d\n", max_mag_lb, samperr_lb);
 
-        FILE* f = fopen("upper_fart.cs16", "ab");
+        //FILE* f = fopen("upper_fart.cs16", "ab");
 
         for (i = 0; i < st->fftcp * (ACQUIRE_SYMBOLS + 1); i++)
         {
@@ -146,10 +146,10 @@ void acquire_process(acquire_t *st)
             st->buffer[i] = (st->mode == NRSC5_MODE_FM) ? conjf(y) : y;
         }
 
-        fclose(f);
+        //fclose(f);
 
         peak_mag(st, &max_mag_ub, &max_v_ub, &samperr_ub);
-        printf("upper: max_mag: %0.4f samperr: %d\n", max_mag_ub, samperr_ub);
+        //printf("upper: max_mag: %0.4f samperr: %d\n", max_mag_ub, samperr_ub);
 
         if (max_mag_ub < max_mag_lb)
         {
