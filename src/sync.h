@@ -6,9 +6,15 @@
 
 typedef struct
 {
+    float freq;
+    float phase;
+    float phases[BLKSZ];
+} coastas_t;
+
+typedef struct
+{
     struct input_t *input;
     float complex buffer[FFT_FM][BLKSZ];
-    float phases[FFT_FM][BLKSZ];
     unsigned int idx;
     int psmi;
     int pli;
@@ -23,10 +29,10 @@ typedef struct
 
     float alpha;
     float beta;
-    float costas_freq[FFT_FM];
-    float costas_phase[FFT_FM];
+    coastas_t loop[FFT_FM];
 
     int mer_cnt;
+    int mer_known;
     float error_lb;
     float error_ub;
 } sync_t;

@@ -87,10 +87,20 @@ static uint8_t qam64(complex float cf)
     return gray8(crealf(cf)) | (gray8(cimagf(cf)) << 3);
 }
 
-static void adjust_ref(sync_t *st, unsigned int ref, int cfo)
+static void track_ref(sync_t *st, coastas_t* loop, const float error, const float cfo_freq)
+{
+    loop->freq += st->beta * error;
+    if (loop->freq > 0.5) loop->freq = 0.5;
+    if (loop->freq < -0.5) loop->freq = -0.5;
+    loop->phase += loop->freq + cfo_freq + (st->alpha * error);
+    if (loop->phase > M_PI) loop->phase -= 2 * M_PI;
+    if (loop->phase < -M_PI) loop->phase += 2 * M_PI;
+}
+
+static void adjust_ref(sync_t *st, coastas_t* loop, float complex buffer[BLKSZ], int cfo)
 {
     unsigned int n;
-    float cfo_freq = 2 * M_PI * cfo * CP_FM / FFT_FM;
+    const float cfo_freq = 2 * M_PI * cfo * CP_FM / FFT_FM;
 
     // differentially-encoded sync & parity bits
     static const signed char sync[] = {
@@ -100,39 +110,38 @@ static void adjust_ref(sync_t *st, unsigned int ref, int cfo)
 
     for (n = 0; n < BLKSZ; n++)
     {
-        float error = cargf(st->buffer[ref][n] * st->buffer[ref][n] * cexpf(-I * 2 * st->costas_phase[ref])) * 0.5;
+        const float error = cargf(buffer[n] * buffer[n] * cexpf(-I * 2 * loop->phase)) * 0.5;
 
-        st->phases[ref][n] = st->costas_phase[ref];
-        st->buffer[ref][n] *= cexpf(-I * st->costas_phase[ref]);
+        loop->phases[n] = loop->phase;
+        buffer[n] *= cexpf(-I * loop->phase);
 
-        st->costas_freq[ref] += st->beta * error;
-        if (st->costas_freq[ref] > 0.5) st->costas_freq[ref] = 0.5;
-        if (st->costas_freq[ref] < -0.5) st->costas_freq[ref] = -0.5;
-        st->costas_phase[ref] += st->costas_freq[ref] + cfo_freq + (st->alpha * error);
-        if (st->costas_phase[ref] > M_PI) st->costas_phase[ref] -= 2 * M_PI;
-        if (st->costas_phase[ref] < -M_PI) st->costas_phase[ref] += 2 * M_PI;
+        track_ref(st, loop, error, cfo_freq);
     }
 
     // compare to sync & parity bits
     float x = 0;
     for (n = 0; n < BLKSZ; n++)
-        x += crealf(st->buffer[ref][n]) * sync[n];
+        x += crealf(buffer[n]) * sync[n];
     if (x < 0)
     {
         // adjust phase by pi to compensate
         for (n = 0; n < BLKSZ; n++)
         {
-            st->phases[ref][n] += M_PI;
-            st->buffer[ref][n] *= -1;
+            loop->phases[n] += M_PI;
+            buffer[n] *= -1;
         }
-        st->costas_phase[ref] += M_PI;
+        loop->phase += M_PI;
     }
+
+
+    //while (loop->phase > M_PI) loop->phase -= M_PI;
+    //while (loop->phase < -M_PI) loop->phase += M_PI;
 }
 
 static void reset_ref(sync_t *st, unsigned int ref)
 {
     for (unsigned int n = 0; n < BLKSZ; n++)
-        st->buffer[ref][n] *= cexpf(I * st->phases[ref][n]);
+        st->buffer[ref][n] *= cexpf(I * st->loop[ref].phases[n]);
 }
 
 static void decode_dbpsk(const float complex *buf, unsigned char *data, int size)
@@ -185,7 +194,7 @@ static int decode_ref_fm(sync_t *st, unsigned int ref, unsigned int rsid, unsign
     return 0;
 }
 
-static int find_ref_fm(sync_t *st, unsigned int ref, unsigned int rsid)
+static int find_ref_fm(sync_t *st, float complex ref[BLKSZ], unsigned int rsid)
 {
     signed char needle[] = {
         0, 1, 0, 0, 0, 1, 1, -1, 1, 0, rsid >> 1, (rsid >> 1) ^ (rsid & 1), -1, 0, 0, -1,
@@ -194,7 +203,7 @@ static int find_ref_fm(sync_t *st, unsigned int ref, unsigned int rsid)
     unsigned char data[BLKSZ];
 
     for (int n = 0; n < BLKSZ; n++)
-        data[n] = crealf(st->buffer[ref][n]) <= 0 ? 0 : 1;
+        data[n] = crealf(ref[n]) <= 0 ? 0 : 1;
 
     int match = fuzzy_match(needle, sizeof(needle), data, BLKSZ);
     if (match >= 0)
@@ -267,17 +276,22 @@ static void adjust_data(sync_t *st, unsigned int lower, unsigned int upper)
     smag19 = calc_smag(st, upper);
 
     for (int n = 0; n < BLKSZ; n++)
+        st->buffer[lower][n] /= smag0;
+    for (int n = 0; n < BLKSZ; n++)
+        st->buffer[upper][n] /= smag19;
+
+    for (int n = 0; n < BLKSZ; n++)
     {
         float mag_inc = (smag19 - smag0) / PARTITION_WIDTH_FM;
         float mag_acc = smag0;
 
-        float phase_diff = st->phases[upper][n] - st->phases[lower][n];
+        float phase_diff = st->loop[upper].phases[n] - st->loop[lower].phases[n];
         if (phase_diff > M_PI)
             phase_diff -= 2 * M_PI;
         else if (phase_diff < -M_PI)
             phase_diff += 2 * M_PI;
         float complex phase_inc = cexpf(I * phase_diff / PARTITION_WIDTH_FM);
-        float complex phase_acc = cexpf(st->phases[lower][n] * I);
+        float complex phase_acc = cexpf(st->loop[lower].phases[n] * I);
 
         for (int k = 1; k < PARTITION_WIDTH_FM; k++)
         {
@@ -312,15 +326,22 @@ void detect_cfo(sync_t *st)
 
         for (int i = 0; i <= PM_PARTITIONS; i++)
         {
-            adjust_ref(st, cfo + LB_START + i * PARTITION_WIDTH_FM, cfo);
-            offset = find_ref_fm(st, cfo + LB_START + i * PARTITION_WIDTH_FM, (MIDDLE_REF_SC-i) & 0x3);
-            reset_ref(st, cfo + LB_START + i * PARTITION_WIDTH_FM);
+            coastas_t loop = {0};
+            float complex buffer[BLKSZ];
+
+            memcpy(buffer, st->buffer[cfo + LB_START + i * PARTITION_WIDTH_FM],  BLKSZ * sizeof(float complex));
+
+            adjust_ref(st, &loop, buffer, cfo);
+            offset = find_ref_fm(st, buffer, (MIDDLE_REF_SC-i) & 0x3);
             if (offset >= 0)
                 offset_count[offset]++;
 
-            adjust_ref(st, cfo + UB_END - i * PARTITION_WIDTH_FM, cfo);
-            offset = find_ref_fm(st, cfo + UB_END - i * PARTITION_WIDTH_FM, (MIDDLE_REF_SC-i) & 0x3);
-            reset_ref(st, cfo + UB_END - i * PARTITION_WIDTH_FM);
+            coastas_t loop2 = {0};
+
+            memcpy(buffer, st->buffer[cfo + UB_END - i * PARTITION_WIDTH_FM],  BLKSZ * sizeof(float complex));
+
+            adjust_ref(st, &loop2,  buffer, cfo);
+            offset = find_ref_fm(st, buffer, (MIDDLE_REF_SC-i) & 0x3);
             if (offset >= 0)
                 offset_count[offset]++;
         }
@@ -368,8 +389,8 @@ void sync_process_fm(sync_t *st)
 
     for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM + 1; i += PARTITION_WIDTH_FM)
     {
-        adjust_ref(st, LB_START + i, 0);
-        adjust_ref(st, UB_END - i, 0);
+        adjust_ref(st, &st->loop[LB_START + i], st->buffer[LB_START + i], 0);
+        adjust_ref(st, &st->loop[UB_END - i], st->buffer[UB_END - i], 0);
     }
 
     // check if we now have synchronization
@@ -441,9 +462,10 @@ void sync_process_fm(sync_t *st)
             adjust_data(st, LB_START + i, LB_START + i + PARTITION_WIDTH_FM);
             adjust_data(st, UB_END - i - PARTITION_WIDTH_FM, UB_END - i);
 
-            samperr_lb += phase_diff(st->phases[LB_START + i][0], st->phases[LB_START + i + PARTITION_WIDTH_FM][0]);
-            samperr_ub += phase_diff(st->phases[UB_END - i - PARTITION_WIDTH_FM][0], st->phases[UB_END - i][0]);
+            samperr_lb += phase_diff(st->loop[LB_START + i].phases[0], st->loop[LB_START + i + PARTITION_WIDTH_FM].phases[0]);
+            samperr_ub += phase_diff(st->loop[UB_END - i - PARTITION_WIDTH_FM].phases[0], st->loop[UB_END - i].phases[0]);
         }
+
         samperr_lb = samperr_lb / (float)partitions_per_band * FFT_FM / PARTITION_WIDTH_FM / (2 * M_PI);
         samperr_ub = samperr_ub / (float)partitions_per_band * FFT_FM / PARTITION_WIDTH_FM / (2 * M_PI);
 
@@ -452,26 +474,19 @@ void sync_process_fm(sync_t *st)
             float x, y;
 
             x = LB_START + i - (FFT_FM / 2);
-            y = st->costas_freq[LB_START + i];
+            y = st->loop[LB_START + i].freq;
             angle_lb += y;
             sum_xy_lb += x * y;
             sum_x2_lb += x * x;
 
             x = UB_END - i - (FFT_FM / 2);
-            y = st->costas_freq[UB_END - i];
+            y = st->loop[UB_END - i].freq;
             angle_ub += y;
             sum_xy_ub += x * y;
             sum_x2_ub += x * x;
         }
         samperr_lb -= (sum_xy_lb / sum_x2_lb) * FFT_FM / (2 * M_PI) * ACQUIRE_SYMBOLS;
         samperr_ub -= (sum_xy_ub / sum_x2_ub) * FFT_FM / (2 * M_PI) * ACQUIRE_SYMBOLS;
-
-        // for (i = 1; i < partitions_per_band * PARTITION_WIDTH_FM; i += PARTITION_WIDTH_FM)
-        // {
-        //     st->phases[LB_START + i];
-        // }
-
-        //printf("after coastas samperr_lb: %0.1f, after coastas samperr_ub: %0.1f\n", samperr_lb, samperr_ub);
 
         angle_lb /= (float)(partitions_per_band + 1);
         angle_ub /= (float)(partitions_per_band + 1);
@@ -483,26 +498,68 @@ void sync_process_fm(sync_t *st)
         st->angle = angle;
         for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM + 1; i += PARTITION_WIDTH_FM)
         {
-            st->costas_freq[LB_START + i] -= st->angle;
-            st->costas_freq[UB_END - i] -= st->angle;
+            st->loop[LB_START + i].freq -= st->angle;
+            st->loop[UB_END - i].freq -= st->angle;
         }
+
+        // float var_phi_lb = 0, var_phi_ub = 0;
+        // float avg_phase_lb = 0, avg_phase_ub = 0;
+        //
+        // for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM + 1; i += PARTITION_WIDTH_FM)
+        // {
+        //     for (int n = 0; n < BLKSZ; n++)
+        //     {
+        //         avg_phase_lb += st->loop[LB_START + i].phases[n];
+        //         avg_phase_ub += st->loop[UB_END - i].phases[n];
+        //     }
+        // }
+        //
+        // avg_phase_ub = avg_phase_ub / (float)(partitions_per_band + 1) / BLKSZ;
+        // avg_phase_lb = avg_phase_lb / (float)(partitions_per_band + 1) / BLKSZ;
+        //
+        // for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM + 1; i += PARTITION_WIDTH_FM)
+        // {
+        //     for (int n = 0; n < BLKSZ; n++)
+        //     {
+        //         float d_lb = st->loop[LB_START + i].phases[n] - avg_phase_lb;
+        //         float d_ub = st->loop[UB_END - i].phases[n] - avg_phase_ub;
+        //
+        //         var_phi_lb += d_lb * d_lb;
+        //         var_phi_ub += d_ub * d_ub;
+        //     }
+        // }
+        //
+        // var_phi_ub = var_phi_ub / (float)(partitions_per_band + 1) / (BLKSZ);
+        // var_phi_lb = var_phi_lb / (float)(partitions_per_band + 1) / (BLKSZ);
+        //
+        // float phi_lb = sqrtf(var_phi_lb);
+        // float phi_ub = sqrtf(var_phi_ub);
+        //
+        // printf("phi_lb: %.4f\n", phi_lb / M_PI);
+        // printf("phi_ub: %.4f\n", phi_ub / M_PI);
 
         // Calculate modulation error
         float error_lb = 0, error_ub = 0;
-        for (int n = 0; n < BLKSZ; n++)
+
+        for (i = 0; i <= partitions_per_band; i++)
         {
+            const unsigned int rsid = (MIDDLE_REF_SC-i) & 0x3;
+            const signed char needle[] = {
+                0, 1, -1, 0, 0, 1, 1, -1, 1, 0, rsid >> 1, (rsid >> 1) ^ (rsid & 1), -1, 0, 0, -1,
+                -1, -1, -1, -1, 0, 1, 0, -1, -1, -1, -1, -1, -1, -1, -1, 0
+            };
+
             float complex c, ideal;
-            for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM; i += PARTITION_WIDTH_FM)
+            for (int n = 0; n < BLKSZ; n++)
             {
-                unsigned int j;
-                for (j = 1; j < PARTITION_WIDTH_FM; j++)
+                if (needle[n] >= 0)
                 {
-                    c = st->buffer[LB_START + i + j][n];
-                    ideal = CMPLXF(crealf(c) >= 0 ? 1 : -1, cimagf(c) >= 0 ? 1 : -1);
+                    c = st->buffer[LB_START + i * PARTITION_WIDTH_FM][n];
+                    ideal = CMPLXF(needle[n] != 0 ? 1 : -1, 0.0);
                     error_lb += normf(ideal - c);
 
-                    c = st->buffer[UB_END - i - PARTITION_WIDTH_FM + j][n];
-                    ideal = CMPLXF(crealf(c) >= 0 ? 1 : -1, cimagf(c) >= 0 ? 1 : -1);
+                    c = st->buffer[UB_END - i * PARTITION_WIDTH_FM][n];
+                    ideal = CMPLXF(needle[n] != 0 ? 1 : -1, 0.0);
                     error_ub += normf(ideal - c);
                 }
             }
@@ -514,7 +571,7 @@ void sync_process_fm(sync_t *st)
         // Display average MER for each sideband
         if (++st->mer_cnt == 16)
         {
-            float signal = 2 * BLKSZ * (partitions_per_band * PARTITION_DATA_CARRIERS) * st->mer_cnt;
+            float signal = (BLKSZ - 15) * (float)(partitions_per_band + 1) * st->mer_cnt;
             float mer_db_lb = 10 * log10f(signal / st->error_lb);
             float mer_db_ub = 10 * log10f(signal / st->error_ub);
 
@@ -526,8 +583,8 @@ void sync_process_fm(sync_t *st)
         }
 
         // Soft demod based on MER for each sideband
-        float mer_lb = 2.0f * BLKSZ * (float)(partitions_per_band * PARTITION_DATA_CARRIERS) / error_lb;
-        float mer_ub = 2.0f * BLKSZ * (float)(partitions_per_band * PARTITION_DATA_CARRIERS) / error_ub;
+        float mer_lb = (BLKSZ - 15) * (float)(partitions_per_band + 1) / error_lb;
+        float mer_ub = (BLKSZ - 15) * (float)(partitions_per_band + 1) / error_ub;
 
         const float mult_lb = fmaxf(fminf(mer_lb * 10, 127), 1);
         const float mult_ub = fmaxf(fminf(mer_ub * 10, 127), 1);
@@ -797,8 +854,8 @@ void sync_adjust(sync_t *st, int sample_adj)
     int i;
     for (i = 0; i < MAX_PARTITIONS * PARTITION_WIDTH_FM + 1; i++)
     {
-        st->costas_phase[LB_START + i] -= sample_adj * (LB_START + i - (FFT_FM / 2)) * 2 * M_PI / FFT_FM;
-        st->costas_phase[UB_END - i] -= sample_adj * (UB_END - i - (FFT_FM / 2)) * 2 * M_PI / FFT_FM;
+        st->loop[LB_START + i].phase -= sample_adj * (LB_START + i - (FFT_FM / 2)) * 2 * M_PI / FFT_FM;
+        st->loop[UB_END - i].phase -= sample_adj * (UB_END - i - (FFT_FM / 2)) * 2 * M_PI / FFT_FM;
     }
 }
 
@@ -838,8 +895,8 @@ void sync_reset(sync_t *st)
     unsigned int i;
     for (i = 0; i < FFT_FM; i++)
     {
-        st->costas_freq[i] = 0;
-        st->costas_phase[i] = 0;
+        st->loop[i].freq = 0;
+        st->loop[i].phase = 0;
     }
 
     st->idx = 0;
