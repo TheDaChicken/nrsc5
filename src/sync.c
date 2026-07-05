@@ -268,6 +268,15 @@ static void adjust_data(sync_t *st, unsigned int lower, unsigned int upper)
 
     for (int n = 0; n < BLKSZ; n++)
     {
+        st->buffer[lower][n] /= smag0;
+    }
+    for (int n = 0; n < BLKSZ; n++)
+    {
+        st->buffer[upper][n] /= smag19;
+    }
+
+    for (int n = 0; n < BLKSZ; n++)
+    {
         float complex upper_phase = cexpf(st->phases[upper][n] * I);
         float complex lower_phase = cexpf(st->phases[lower][n] * I);
 
@@ -464,20 +473,25 @@ void sync_process_fm(sync_t *st)
 
         // Calculate modulation error
         float error_lb = 0, error_ub = 0;
-        for (int n = 0; n < BLKSZ; n++)
+        for (i = 0; i <= partitions_per_band; i++)
         {
+            const unsigned int rsid = (MIDDLE_REF_SC-i) & 0x3;
+            signed char needle[] = {
+                0, 1, 0, 0, 0, 1, 1, -1, 1, 0, rsid >> 1, (rsid >> 1) ^ (rsid & 1), -1, 0, 0, -1,
+                -1, -1, -1, -1, 0, 1, 0, -1, -1, -1, -1, -1, -1, -1, -1, 0
+            };
+
             float complex c, ideal;
-            for (i = 0; i < partitions_per_band * PARTITION_WIDTH_FM; i += PARTITION_WIDTH_FM)
+            for (int n = 0; n < BLKSZ; n++)
             {
-                unsigned int j;
-                for (j = 1; j < PARTITION_WIDTH_FM; j++)
+                if (needle[n] >= 0)
                 {
-                    c = st->buffer[LB_START + i + j][n];
-                    ideal = CMPLXF(crealf(c) >= 0 ? 1 : -1, cimagf(c) >= 0 ? 1 : -1);
+                    c = st->buffer[LB_START + i * PARTITION_WIDTH_FM][n];
+                    ideal = CMPLXF(needle[n] != 0 ? 1 : -1, 0.0);
                     error_lb += normf(ideal - c);
 
-                    c = st->buffer[UB_END - i - PARTITION_WIDTH_FM + j][n];
-                    ideal = CMPLXF(crealf(c) >= 0 ? 1 : -1, cimagf(c) >= 0 ? 1 : -1);
+                    c = st->buffer[UB_END - i * PARTITION_WIDTH_FM][n];
+                    ideal = CMPLXF(needle[n] != 0 ? 1 : -1, 0.0);
                     error_ub += normf(ideal - c);
                 }
             }
@@ -489,7 +503,7 @@ void sync_process_fm(sync_t *st)
         // Display average MER for each sideband
         if (++st->mer_cnt == 16)
         {
-            float signal = 2 * BLKSZ * (partitions_per_band * PARTITION_DATA_CARRIERS) * st->mer_cnt;
+            float signal = (BLKSZ - 15) * (float)(partitions_per_band + 1) * st->mer_cnt;
             float mer_db_lb = 10 * log10f(signal / st->error_lb);
             float mer_db_ub = 10 * log10f(signal / st->error_ub);
 
@@ -501,8 +515,8 @@ void sync_process_fm(sync_t *st)
         }
 
         // Soft demod based on MER for each sideband
-        const float mer_lb = 2.0f * BLKSZ * (float)(partitions_per_band * PARTITION_DATA_CARRIERS) / error_lb;
-        const float mer_ub = 2.0f * BLKSZ * (float)(partitions_per_band * PARTITION_DATA_CARRIERS) / error_ub;
+        const float mer_lb = (BLKSZ - 15) * (float)(partitions_per_band + 1) / error_lb;
+        const float mer_ub = (BLKSZ - 15) * (float)(partitions_per_band + 1) / error_ub;
         const float mult_lb = fmaxf(fminf(mer_lb * 10, 127), 1);
         const float mult_ub = fmaxf(fminf(mer_ub * 10, 127), 1);
 
