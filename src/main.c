@@ -762,6 +762,34 @@ ma_result file_seek(ma_encoder* pEncoder, ma_int64 offset, ma_seek_origin origin
     return MA_SUCCESS;
 }
 
+static void cleanup(state_t *st)
+{
+    if (st->hdc_file)
+        fclose(st->hdc_file);
+    if (st->iq_file)
+        fclose(st->iq_file);
+
+    free(st->input_name);
+    free(st->rtltcp_host);
+    free(st->aas_files_path);
+
+    if (st->out_format == OUTPUT_FORMAT_DEVICE)
+    {
+        ma_pcm_rb_uninit(&st->buffer);
+        ma_device_uninit(&st->dev);
+    }
+    else
+    {
+        ma_encoder_uninit(&st->encoder);
+    }
+
+    if (st->audio_file)
+        fclose(st->audio_file);
+
+    pthread_cond_destroy(&st->cond);
+    pthread_mutex_destroy(&st->mutex);
+}
+
 static int parse_args(state_t *st, int argc, char *argv[])
 {
     static const struct option long_opts[] = {
@@ -776,6 +804,7 @@ static int parse_args(state_t *st, int argc, char *argv[])
     char *audio_type = "wav";
     char *endptr;
     int opt;
+    int ret = 0;
 
     st->mode = NRSC5_MODE_FM;
     st->gain = -1;
@@ -876,7 +905,8 @@ static int parse_args(state_t *st, int argc, char *argv[])
     if (optind + (!st->input_name + 1) != argc)
     {
         help(argv[0]);
-        return 1;
+        ret = -1;
+        goto fail;
     }
 
     if (!st->input_name)
@@ -885,7 +915,8 @@ static int parse_args(state_t *st, int argc, char *argv[])
         if (*endptr != 0)
         {
             log_fatal("Invalid frequency.");
-            return -1;
+            ret = -1;
+            goto fail;
         }
 
         // compatibility with previous versions
@@ -907,7 +938,8 @@ static int parse_args(state_t *st, int argc, char *argv[])
     if (*endptr != 0)
     {
         log_fatal("Invalid program.");
-        return -1;
+        ret = -1;
+        goto fail;
     }
 
     if (audio_name)
@@ -919,19 +951,21 @@ static int parse_args(state_t *st, int argc, char *argv[])
         if (st->audio_file == NULL)
         {
             log_fatal("Unable to open file output.");
-            return 1;
+            ret = -1;
+            goto fail;
         }
 
         if (strcmp(audio_type, "wav") == 0)
         {
+            st->out_format = OUTPUT_FORMAT_WAV;
+
             ma_encoder_config config = ma_encoder_config_init(ma_encoding_format_wav, ma_format_s16, 2, NRSC5_SAMPLE_RATE_AUDIO);
             ma_result result = ma_encoder_init(file_write, file_seek, st->audio_file, &config, &st->encoder);
             if (result != MA_SUCCESS) {
                 log_fatal("Unable to open encoder: %s", ma_result_description(result));
-                return -1;  // Failed to initialize the device.
+                ret = -1;
+                goto fail;
             }
-
-            st->out_format = OUTPUT_FORMAT_WAV;
         }
         else
         {
@@ -951,22 +985,24 @@ static int parse_args(state_t *st, int argc, char *argv[])
         config.noFixedSizedCallback = 1;
         config.noPreSilencedOutputBuffer = 1;
 
+        st->out_format = OUTPUT_FORMAT_DEVICE;
+
         result = ma_device_init(NULL, &config, &st->dev);
         if (result != MA_SUCCESS) {
             log_fatal("Unable to open audio device: %s", ma_result_description(result));
-            return -1;  // Failed to initialize the device.
+            ret = -1;
+            goto fail;
         }
 
         result = ma_pcm_rb_init(config.playback.format, config.playback.channels, NRSC5_AUDIO_FRAME_SAMPLES * AUDIO_BUFFERS, NULL, NULL, &st->buffer);
         if (result != MA_SUCCESS) {
             log_fatal("Failed to allocate ring buffer: %s", ma_result_description(result));
-            return -1; // Failed to initialize the device.
+            ret = -1;
+            goto fail;
         }
 
         pthread_cond_init(&st->cond, NULL);
         pthread_mutex_init(&st->mutex, NULL);
-
-        st->out_format = OUTPUT_FORMAT_DEVICE;
     }
 
     if (output_name)
@@ -978,7 +1014,8 @@ static int parse_args(state_t *st, int argc, char *argv[])
         if (st->iq_file == NULL)
         {
             log_fatal("Unable to open IQ output.");
-            return 1;
+            ret = -1;
+            goto fail;
         }
     }
 
@@ -991,11 +1028,15 @@ static int parse_args(state_t *st, int argc, char *argv[])
         if (st->hdc_file == NULL)
         {
             log_fatal("Unable to open HDC output.");
-            return 1;
+            ret = -1;
+            goto fail;
         }
     }
 
-    return 0;
+    return ret;
+fail:
+    cleanup(st);
+    return ret;
 }
 
 static void log_lock(void *udata, int lock)
@@ -1005,30 +1046,6 @@ static void log_lock(void *udata, int lock)
         pthread_mutex_lock(mutex);
     else
         pthread_mutex_unlock(mutex);
-}
-
-static void cleanup(state_t *st)
-{
-    if (st->hdc_file)
-        fclose(st->hdc_file);
-    if (st->iq_file)
-        fclose(st->iq_file);
-
-    free(st->input_name);
-    free(st->aas_files_path);
-
-    if (st->out_format == OUTPUT_FORMAT_DEVICE)
-    {
-        ma_pcm_rb_uninit(&st->buffer);
-        ma_device_uninit(&st->dev);
-    }
-    else
-    {
-        ma_encoder_uninit(&st->encoder);
-    }
-
-    if (st->audio_file)
-        fclose(st->audio_file);
 }
 
 static int read_more_input(state_t *st)
@@ -1050,6 +1067,7 @@ int main(int argc, char *argv[])
     nrsc5_t *radio = NULL;
     state_t *st = calloc(1, sizeof(state_t));
     FILE *fp = NULL;
+    int ret = 0;
 
     pthread_mutex_init(&log_mutex, NULL);
     log_set_lock(log_lock);
@@ -1070,12 +1088,14 @@ int main(int argc, char *argv[])
         if (fp == NULL)
         {
             log_fatal("Open IQ file failed: %s", strerror(errno));
-            return 1;
+            ret = 1;
+            goto failure;
         }
         if (nrsc5_open_pipe(&radio) != 0)
         {
             log_fatal("Open IQ failed.");
-            return 1;
+            ret = 1;
+            goto failure;
         }
     }
     else if (st->rtltcp_host)
@@ -1084,12 +1104,14 @@ int main(int argc, char *argv[])
         if (s == -1)
         {
             log_fatal("Connection failed.");
-            return 1;
+            ret = 1;
+            goto failure;
         }
         if (nrsc5_open_rtltcp(&radio, s) != 0)
         {
             log_fatal("Open remote device failed.");
-            return 1;
+            ret = 1;
+            goto failure;
         }
     }
     else
@@ -1097,31 +1119,36 @@ int main(int argc, char *argv[])
         if (nrsc5_open(&radio, st->device_index) != 0)
         {
             log_fatal("Open device failed.");
-            return 1;
+            ret = 1;
+            goto finish;
         }
     }
     if (nrsc5_set_bias_tee(radio, st->bias_tee) != 0)
     {
         log_fatal("Set bias-T failed.");
-        return 1;
+        ret = 1;
+        goto finish;
     }
     if (st->direct_sampling != -1)
     {
         if (nrsc5_set_direct_sampling(radio, st->direct_sampling) != 0)
         {
             log_fatal("Set direct sampling failed.");
-            return 1;
+            ret = 1;
+            goto finish;
         }
     }
     if (st->ppm_error != INT_MIN && nrsc5_set_freq_correction(radio, st->ppm_error) != 0)
     {
         log_fatal("Set frequency correction failed.");
-        return 1;
+        ret = 1;
+        goto finish;
     }
     if (nrsc5_set_frequency(radio, st->freq) != 0)
     {
         log_fatal("Set frequency failed.");
-        return 1;
+        ret = 1;
+        goto finish;
     }
     nrsc5_set_mode(radio, st->mode);
     if (st->gain >= 0.0f)
@@ -1135,7 +1162,8 @@ int main(int argc, char *argv[])
         if ((result = ma_device_start(&st->dev)) != MA_SUCCESS)
         {
             log_fatal("Device start failed: %s", ma_result_description(result));
-            return 1;
+            ret = 1;
+            goto finish;
         }
     }
 
@@ -1218,10 +1246,12 @@ int main(int argc, char *argv[])
     }
 #endif
 
+finish:
     nrsc5_stop(radio);
     nrsc5_set_bias_tee(radio, 0);
     nrsc5_close(radio);
 
+failure:
     if (st->input_name)
     {
         fclose(fp);
@@ -1229,5 +1259,5 @@ int main(int argc, char *argv[])
 
     cleanup(st);
     free(st);
-    return 0;
+    return ret;
 }
