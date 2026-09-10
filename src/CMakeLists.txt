@@ -94,9 +94,10 @@ endif ()
 if (BUILD_CLI)
     add_library(miniaudio STATIC
         miniaudio.c
+        dr_wav.c
     )
     target_compile_definitions(miniaudio
-            PRIVATE "-DMA_NO_GENERATION" "-DMA_NO_NODE_GRAPH" "-DMA_NO_DECODING")
+            PRIVATE "-DMA_NO_GENERATION" "-DMA_NO_NODE_GRAPH" "-DMA_NO_DECODING" "-DMA_NO_ENCODING")
 
     add_executable (
         app

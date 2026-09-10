@@ -39,6 +39,7 @@
 #endif
 
 #include "miniaudio.h"
+#include "dr_wav.h"
 #include "bitwriter.h"
 #include "log.h"
 
@@ -73,7 +74,7 @@ typedef struct {
     char *rtltcp_host;
     enum output_format out_format;
     ma_device dev;
-    ma_encoder encoder;
+    drwav wav;
     FILE *audio_file;
     FILE *hdc_file;
     FILE *iq_file;
@@ -101,7 +102,6 @@ typedef struct {
 static void push_audio_buffer(state_t *st, unsigned int program, const int16_t *data, size_t count, unsigned int flags)
 {
     const ma_uint32 frames = count / AUDIO_CHANNELS;
-    ma_result result;
 
     pthread_mutex_lock(&st->mutex);
     unsigned int prog = st->program;
@@ -119,14 +119,14 @@ static void push_audio_buffer(state_t *st, unsigned int program, const int16_t *
     }
     else if (st->out_format == OUTPUT_FORMAT_WAV)
     {
-        result = ma_encoder_write_pcm_frames(&st->encoder, data, frames, NULL);
-
-        if (result != MA_SUCCESS)
-            log_error("Failed to write audio: %s", ma_result_description(result));
+        const unsigned int framesWritten = drwav_write_pcm_frames(&st->wav, frames, data);
+        if (framesWritten < frames)
+            log_error("Failed to write audio");
     }
     else
     {
         ma_uint32 frames_written = 0;
+        ma_result result;
 
         while (frames_written < frames)
         {
@@ -737,29 +737,24 @@ static int ends_with(const char *str, const char *suffix)
     return (len >= suffix_len) && (strcmp(str + len - suffix_len, suffix) == 0);
 }
 
-ma_result file_write(ma_encoder* pEncoder, const void* pBufferIn, size_t bytesToWrite, size_t* pBytesWritten)
+size_t file_write(void* pUserData, const void* pData, size_t bytesToWrite)
 {
-    FILE* file = pEncoder->pUserData;
-    size_t result = fwrite(pBufferIn, 1, bytesToWrite, file);
-    if (pBytesWritten != NULL) {
-        *pBytesWritten = result;
-    }
-    return result == bytesToWrite ? MA_SUCCESS : MA_IO_ERROR;
+    return fwrite(pData, 1, bytesToWrite, pUserData);
 }
 
-ma_result file_seek(ma_encoder* pEncoder, ma_int64 offset, ma_seek_origin origin)
+drwav_bool32 file_seek(void* pUserData, int offset, drwav_seek_origin origin)
 {
     int whence;
 
-    if (origin == ma_seek_origin_start) {
+    if (origin == DRWAV_SEEK_SET) {
         whence = SEEK_SET;
-    } else if (origin == ma_seek_origin_end) {
+    } else if (origin == DRWAV_SEEK_END) {
         whence = SEEK_END;
     } else {
         whence = SEEK_CUR;
     }
-    fseek(pEncoder->pUserData, offset, whence);
-    return MA_SUCCESS;
+    fseek(pUserData, offset, whence);
+    return 1;
 }
 
 static int parse_args(state_t *st, int argc, char *argv[])
@@ -924,11 +919,16 @@ static int parse_args(state_t *st, int argc, char *argv[])
 
         if (strcmp(audio_type, "wav") == 0)
         {
-            ma_encoder_config config = ma_encoder_config_init(ma_encoding_format_wav, ma_format_s16, 2, NRSC5_SAMPLE_RATE_AUDIO);
-            ma_result result = ma_encoder_init(file_write, file_seek, st->audio_file, &config, &st->encoder);
-            if (result != MA_SUCCESS) {
-                log_fatal("Unable to open encoder: %s", ma_result_description(result));
-                return -1;  // Failed to initialize the device.
+            drwav_data_format format;
+            format.container = drwav_container_rf64;
+            format.format = DR_WAVE_FORMAT_PCM;
+            format.channels = AUDIO_CHANNELS;
+            format.sampleRate = NRSC5_SAMPLE_RATE_AUDIO;
+            format.bitsPerSample = 16;
+            if (!drwav_init_write(&st->wav, &format, file_write, file_seek, st->audio_file, NULL))
+            {
+                log_fatal("Unable to open encoder");
+                return -1;
             }
 
             st->out_format = OUTPUT_FORMAT_WAV;
@@ -1024,7 +1024,7 @@ static void cleanup(state_t *st)
     }
     else
     {
-        ma_encoder_uninit(&st->encoder);
+        drwav_uninit(&st->wav);
     }
 
     if (st->audio_file)
